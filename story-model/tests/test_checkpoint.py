@@ -1,22 +1,62 @@
 import torch
 
-from story_model.checkpoint import load_checkpoint, save_checkpoint
+from story_model.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
 from story_model.models.bigram import BigramLanguageModel
 
 
-def test_save_and_load_roundtrip(tmp_path):
+def test_checkpoint_contains_version_and_rng(tmp_path):
     model = BigramLanguageModel(vocabulary_size=10)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
-    ckpt_path = tmp_path / "checkpoints" / "test.pt"
-    save_checkpoint(ckpt_path, model, optimizer, step=42, extra={"note": "test"})
-    assert ckpt_path.exists()
+    path = tmp_path / "versioned.pt"
 
-    loaded_model = BigramLanguageModel(vocabulary_size=10)
-    loaded_optimizer = torch.optim.AdamW(loaded_model.parameters(), lr=1e-3)
-    checkpoint = load_checkpoint(ckpt_path, loaded_model, loaded_optimizer)
+    save_checkpoint(
+        path,
+        model,
+        step=12,
+    )
 
-    assert checkpoint["step"] == 42
-    assert checkpoint["extra"] == {"note": "test"}
-    for p1, p2 in zip(model.parameters(), loaded_model.parameters()):
-        assert torch.equal(p1, p2)
+    checkpoint = read_checkpoint(
+        path,
+        map_location="cpu",
+    )
+
+    assert checkpoint["checkpoint_version"] == 2
+    assert checkpoint["step"] == 12
+    assert "cpu" in checkpoint["rng_state"]
+
+
+def test_checkpoint_restores_cpu_rng(tmp_path):
+    torch.manual_seed(1234)
+
+    model = BigramLanguageModel(vocabulary_size=10)
+    path = tmp_path / "rng.pt"
+
+    save_checkpoint(
+        path,
+        model,
+        step=1,
+    )
+
+    expected_random_values = torch.rand(5)
+
+    # Deliberately disturb the random generator.
+    torch.manual_seed(9999)
+    torch.rand(20)
+
+    restored_model = BigramLanguageModel(
+        vocabulary_size=10
+    )
+
+    load_checkpoint(
+        path,
+        restored_model,
+        map_location="cpu",
+        restore_rng=True,
+    )
+
+    actual_random_values = torch.rand(5)
+
+    assert torch.equal(
+        expected_random_values,
+        actual_random_values,
+    )

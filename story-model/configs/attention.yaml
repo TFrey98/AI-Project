@@ -1,0 +1,22 @@
+model:
+  name: attention
+  embedding_dim: 64
+  dropout: 0.1
+
+data:
+  path: data/input.txt
+  train_split: 0.9
+  block_size: 64
+  batch_size: 32
+
+train:
+  seed: 1337
+  learning_rate: 1.0e-3
+  max_steps: 5000
+  eval_interval: 500
+  eval_iters: 200
+  device: auto
+
+checkpoint:
+  dir: checkpoints/attention
+  save_interval: 1000

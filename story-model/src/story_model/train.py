@@ -1,24 +1,88 @@
-"""Training entry point: reads a config, trains a model, and writes checkpoints."""
+"""Train configured language models and save checkpoints."""
+
+from __future__ import annotations
 
 import argparse
+import math
+import time
 from pathlib import Path
 
 import torch
 import yaml
 
-from story_model.checkpoint import save_checkpoint
-from story_model.data import CharTokenizer, get_batch, load_text, train_test_split
-from story_model.models.bigram import BigramLanguageModel
+from story_model.checkpoint import (
+    load_checkpoint,
+    save_checkpoint,
+)
+from story_model.data import (
+    CharTokenizer,
+    get_batch,
+    load_text,
+    train_test_split,
+)
+from story_model.models import build_model
+from story_model.runtime import (
+    current_memory_bytes,
+    resolve_device,
+    seed_everything,
+    synchronize_device,
+)
 
 
-def resolve_device(device: str) -> str:
-    if device != "auto":
-        return device
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+def learning_rate_for_step(
+    step: int,
+    max_steps: int,
+    maximum_rate: float,
+    minimum_rate: float,
+    warmup_steps: int,
+) -> float:
+    """Linear warmup followed by cosine decay."""
+
+    if max_steps < 1:
+        raise ValueError("max_steps must be positive")
+
+    if warmup_steps < 0:
+        raise ValueError("warmup_steps cannot be negative")
+
+    if warmup_steps >= max_steps:
+        raise ValueError(
+            "warmup_steps must be smaller than max_steps"
+        )
+
+    if warmup_steps > 0 and step < warmup_steps:
+        return maximum_rate * (
+            (step + 1) / warmup_steps
+        )
+
+    decay_steps = max_steps - warmup_steps
+
+    if decay_steps <= 1:
+        return minimum_rate
+
+    decay_position = (
+        step - warmup_steps
+    ) / (decay_steps - 1)
+
+    decay_position = min(
+        max(decay_position, 0.0),
+        1.0,
+    )
+
+    cosine = 0.5 * (
+        1.0 + math.cos(math.pi * decay_position)
+    )
+
+    return minimum_rate + cosine * (
+        maximum_rate - minimum_rate
+    )
+
+
+def set_learning_rate(
+    optimizer: torch.optim.Optimizer,
+    learning_rate: float,
+) -> None:
+    for parameter_group in optimizer.param_groups:
+        parameter_group["lr"] = learning_rate
 
 
 @torch.no_grad()
@@ -32,71 +96,390 @@ def estimate_loss(
     device: str,
 ) -> dict[str, float]:
     model.eval()
-    out = {}
-    for split, data in (("train", train_data), ("val", val_data)):
+    output = {}
+
+    for split, data in (
+        ("train", train_data),
+        ("val", val_data),
+    ):
         losses = torch.zeros(eval_iters)
-        for i in range(eval_iters):
-            x, y = get_batch(data, block_size, batch_size, device)
-            _, loss = model(x, y)
-            losses[i] = loss.item()
-        out[split] = losses.mean().item()
-    model.train()
-    return out
 
-
-def train(config_path: str) -> None:
-    config = yaml.safe_load(Path(config_path).read_text())
-
-    torch.manual_seed(config["train"]["seed"])
-    device = resolve_device(config["train"]["device"])
-
-    text = load_text(config["data"]["path"])
-    tokenizer = CharTokenizer.from_text(text)
-    data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
-    train_data, val_data = train_test_split(data, config["data"]["train_split"])
-
-    model = BigramLanguageModel(tokenizer.vocab_size).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config["train"]["learning_rate"])
-
-    block_size = config["data"]["block_size"]
-    batch_size = config["data"]["batch_size"]
-
-    for step in range(config["train"]["max_steps"]):
-        if step % config["train"]["eval_interval"] == 0:
-            losses = estimate_loss(
-                model,
-                train_data,
-                val_data,
+        for index in range(eval_iters):
+            inputs, targets = get_batch(
+                data,
                 block_size,
                 batch_size,
-                config["train"]["eval_iters"],
                 device,
             )
-            print(f"step {step}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
 
-        if step > 0 and step % config["checkpoint"]["save_interval"] == 0:
-            save_checkpoint(
-                Path(config["checkpoint"]["dir"]) / f"step_{step}.pt",
-                model,
-                optimizer,
-                step,
+            _, loss = model(inputs, targets)
+
+            if loss is None:
+                raise RuntimeError(
+                    "Model did not return evaluation loss"
+                )
+
+            losses[index] = loss.item()
+
+        output[split] = losses.mean().item()
+
+    model.train()
+    return output
+
+
+def train(
+    config_path: str,
+    resume_path: str | None = None,
+) -> None:
+    config = yaml.safe_load(
+        Path(config_path).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    train_config = config["train"]
+    data_config = config["data"]
+    checkpoint_config = config["checkpoint"]
+
+    max_steps = int(train_config["max_steps"])
+    maximum_rate = float(
+        train_config["learning_rate"]
+    )
+    minimum_rate = float(
+        train_config.get(
+            "min_learning_rate",
+            maximum_rate,
+        )
+    )
+    warmup_steps = int(
+        train_config.get("warmup_steps", 0)
+    )
+    gradient_clip = float(
+        train_config.get("gradient_clip", 0.0)
+    )
+    log_interval = int(
+        train_config.get(
+            "log_interval",
+            train_config["eval_interval"],
+        )
+    )
+    weight_decay = float(
+        train_config.get("weight_decay", 0.01)
+    )
+
+    if log_interval < 1:
+        raise ValueError(
+            "log_interval must be positive"
+        )
+
+    seed_everything(train_config["seed"])
+    device = resolve_device(train_config["device"])
+
+    text = load_text(data_config["path"])
+    tokenizer = CharTokenizer.from_text(text)
+
+    encoded = tokenizer.encode(text)
+    data = torch.tensor(
+        encoded,
+        dtype=torch.long,
+    )
+
+    train_data, val_data = train_test_split(
+        data,
+        data_config["train_split"],
+    )
+
+    model = build_model(
+        config["model"],
+        vocabulary_size=tokenizer.vocab_size,
+        block_size=data_config["block_size"],
+    ).to(device)
+
+    parameter_count = sum(
+        parameter.numel()
+        for parameter in model.parameters()
+    )
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=maximum_rate,
+        weight_decay=weight_decay,
+    )
+
+    start_step = 0
+
+    if resume_path is not None:
+        checkpoint = load_checkpoint(
+            resume_path,
+            model,
+            optimizer,
+            map_location="cpu",
+            restore_rng=True,
+        )
+
+        start_step = int(
+            checkpoint.get("step", 0)
+        )
+
+        saved_config = (
+            checkpoint
+            .get("extra", {})
+            .get("config")
+        )
+
+        if (
+            saved_config is not None
+            and saved_config["model"] != config["model"]
+        ):
+            raise ValueError(
+                "Checkpoint model configuration "
+                "does not match the current configuration"
             )
 
-        x, y = get_batch(train_data, block_size, batch_size, device)
-        _, loss = model(x, y)
+        if start_step >= max_steps:
+            raise ValueError(
+                f"Checkpoint has completed {start_step} steps, "
+                f"but max_steps is {max_steps}"
+            )
+
+        print(
+            f"resuming from: {resume_path}"
+        )
+        print(
+            f"completed steps: {start_step}"
+        )
+
+    print(f"device: {device}")
+    print(f"parameters: {parameter_count:,}")
+    print(f"vocabulary: {tokenizer.vocab_size}")
+    print(
+        f"training tokens: {len(train_data):,}"
+    )
+    print(
+        f"validation tokens: {len(val_data):,}"
+    )
+
+    block_size = data_config["block_size"]
+    batch_size = data_config["batch_size"]
+    eval_interval = train_config["eval_interval"]
+    eval_iters = train_config["eval_iters"]
+    save_interval = checkpoint_config["save_interval"]
+
+    peak_memory = current_memory_bytes(device)
+    tokens_since_log = 0
+
+    synchronize_device(device)
+    timing_started = time.perf_counter()
+
+    last_loss = None
+    last_gradient_norm = None
+
+    for step in range(start_step, max_steps):
+        learning_rate = learning_rate_for_step(
+            step=step,
+            max_steps=max_steps,
+            maximum_rate=maximum_rate,
+            minimum_rate=minimum_rate,
+            warmup_steps=warmup_steps,
+        )
+
+        set_learning_rate(
+            optimizer,
+            learning_rate,
+        )
+
+        if step % eval_interval == 0:
+            synchronize_device(device)
+
+            losses = estimate_loss(
+                model=model,
+                train_data=train_data,
+                val_data=val_data,
+                block_size=block_size,
+                batch_size=batch_size,
+                eval_iters=eval_iters,
+                device=device,
+            )
+
+            synchronize_device(device)
+
+            print(
+                f"update {step}: "
+                f"train loss {losses['train']:.4f}, "
+                f"val loss {losses['val']:.4f}, "
+                f"lr {learning_rate:.6g}"
+            )
+
+            # Exclude evaluation time from throughput.
+            tokens_since_log = 0
+            timing_started = time.perf_counter()
+
+        inputs, targets = get_batch(
+            train_data,
+            block_size,
+            batch_size,
+            device,
+        )
+
+        _, loss = model(inputs, targets)
+
+        if loss is None:
+            raise RuntimeError(
+                "Model did not return training loss"
+            )
+
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
+
+        if gradient_clip > 0.0:
+            gradient_norm = (
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    max_norm=gradient_clip,
+                )
+            )
+        else:
+            gradient_norm = torch.tensor(
+                float("nan")
+            )
+
         optimizer.step()
 
-    save_checkpoint(Path(config["checkpoint"]["dir"]) / "final.pt", model, optimizer, config["train"]["max_steps"])
+        last_loss = loss
+        last_gradient_norm = gradient_norm
+        tokens_since_log += inputs.numel()
+
+        peak_memory = max(
+            peak_memory,
+            current_memory_bytes(device),
+        )
+
+        completed_steps = step + 1
+
+        if completed_steps % log_interval == 0:
+            synchronize_device(device)
+
+            elapsed = (
+                time.perf_counter()
+                - timing_started
+            )
+
+            tokens_per_second = (
+                tokens_since_log / elapsed
+                if elapsed > 0
+                else 0.0
+            )
+
+            memory_mebibytes = (
+                current_memory_bytes(device)
+                / (1024**2)
+            )
+
+            gradient_value = (
+                last_gradient_norm.item()
+                if last_gradient_norm is not None
+                else float("nan")
+            )
+
+            print(
+                f"step {completed_steps}: "
+                f"loss {last_loss.item():.4f}, "
+                f"lr {learning_rate:.6g}, "
+                f"grad {gradient_value:.4f}, "
+                f"tokens/s {tokens_per_second:,.0f}, "
+                f"memory {memory_mebibytes:.1f} MiB"
+            )
+
+            tokens_since_log = 0
+            timing_started = time.perf_counter()
+
+        if completed_steps % save_interval == 0:
+            synchronize_device(device)
+
+            save_checkpoint(
+                Path(checkpoint_config["dir"])
+                / f"step_{completed_steps}.pt",
+                model,
+                optimizer,
+                completed_steps,
+                extra={
+                    "config": config,
+                    "tokenizer": {
+                        "stoi": tokenizer.stoi,
+                        "itos": tokenizer.itos,
+                    },
+                },
+            )
+
+            # Exclude checkpoint writing from throughput.
+            synchronize_device(device)
+            tokens_since_log = 0
+            timing_started = time.perf_counter()
+
+    final_losses = estimate_loss(
+        model=model,
+        train_data=train_data,
+        val_data=val_data,
+        block_size=block_size,
+        batch_size=batch_size,
+        eval_iters=eval_iters,
+        device=device,
+    )
+
+    final_path = (
+        Path(checkpoint_config["dir"])
+        / "final.pt"
+    )
+
+    save_checkpoint(
+        final_path,
+        model,
+        optimizer,
+        max_steps,
+        extra={
+            "config": config,
+            "tokenizer": {
+                "stoi": tokenizer.stoi,
+                "itos": tokenizer.itos,
+            },
+        },
+    )
+
+    print(
+        f"final: train loss "
+        f"{final_losses['train']:.4f}, "
+        f"val loss {final_losses['val']:.4f}"
+    )
+    print(
+        f"observed peak tensor memory: "
+        f"{peak_memory / (1024**2):.1f} MiB"
+    )
+    print(f"checkpoint: {final_path}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True, help="Path to a training config YAML file.")
+
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="Path to a training configuration.",
+    )
+
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help="Optional checkpoint from which to resume.",
+    )
+
     args = parser.parse_args()
-    train(args.config)
+
+    train(
+        config_path=args.config,
+        resume_path=args.resume,
+    )
 
 
 if __name__ == "__main__":
     main()
+    
