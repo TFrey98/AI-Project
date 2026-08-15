@@ -1,0 +1,21 @@
+model:
+  name: bigram
+  vocab_size: null  # inferred from data at load time
+
+data:
+  path: data/input.txt
+  train_split: 0.9
+  block_size: 8
+  batch_size: 32
+
+train:
+  seed: 1337
+  learning_rate: 1.0e-3
+  max_steps: 5000
+  eval_interval: 500
+  eval_iters: 200
+  device: auto  # auto | cpu | cuda | mps
+
+checkpoint:
+  dir: checkpoints/bigram
+  save_interval: 1000
