@@ -1,4 +1,13 @@
-"""Generate controlled text from a trained checkpoint."""
+"""Generate controlled text from a trained checkpoint.
+
+This is the "use the model" script, as opposed to train.py ("make the
+model"). Its main job, beyond running generate_tokens(), is FAITHFULLY
+reconstructing the exact model architecture and tokenizer a checkpoint was
+trained with — get either one even slightly wrong (a different
+embedding_dim, a different vocabulary mapping) and the checkpoint's saved
+weights would either fail to load or, worse, load into the wrong shapes
+and produce meaningless output without necessarily raising an error.
+"""
 
 from __future__ import annotations
 
@@ -28,6 +37,24 @@ def load_generation_metadata(
     checkpoint: dict,
     config_path: str | None,
 ) -> tuple[dict, Tokenizer]:
+    """Recover the (config, tokenizer) pair a checkpoint was trained with.
+
+    Newer checkpoints (see train.py's checkpoint_metadata) are
+    self-describing: both the full training config and the tokenizer's
+    to_dict() are embedded directly in the checkpoint's "extra" field, so
+    this function can reconstruct everything from the checkpoint file
+    alone. Two fallback paths exist for checkpoints that predate one of
+    these fields: --config lets the caller supply a config file
+    explicitly (for checkpoints saved before configs were embedded at
+    all), and rebuilding the tokenizer from scratch via build_tokenizer()
+    handles checkpoints saved before tokenizer state was embedded — this
+    only works correctly for a char-level tokenizer (deterministically
+    rebuildable from the training text alone) or a BPE tokenizer whose
+    training is itself deterministic (see ByteBPETokenizer.train's
+    tie-breaking rule in data.py), which is why that determinism was a
+    deliberate design requirement, not an accident.
+    """
+
     extra = checkpoint.get("extra", {})
 
     config = extra.get("config")
@@ -51,6 +78,10 @@ def load_generation_metadata(
             tokenizer_data
         )
     else:
+        # Only ever rebuilt from the TRAINING split, never the full
+        # corpus or validation split — same leakage-avoidance reasoning
+        # as build_tokenizer()'s docstring in data.py: the tokenizer this
+        # checkpoint trained with must never have "seen" validation text.
         training_text, _ = load_text_splits(
             config["data"]
         )
@@ -66,6 +97,21 @@ def encode_prompt(
     tokenizer: Tokenizer,
     prompt: str,
 ) -> list[int]:
+    """Encode a user-supplied prompt, with a friendly error for char-level gaps.
+
+    A CharTokenizer's vocabulary is exactly the set of characters that
+    appeared in its training text — nothing more. If a user's prompt
+    contains a character the model has literally never seen (an emoji, a
+    symbol, a language the corpus didn't include), CharTokenizer.encode()
+    would raise a raw KeyError deep inside a dict lookup, which is
+    accurate but unhelpful. This function checks for that case up front
+    and raises a clear, actionable error naming exactly which characters
+    are the problem. A ByteBPETokenizer never has this issue — it can
+    always fall back to encoding any Unicode text as raw UTF-8 bytes, even
+    for a character its merge vocabulary has never specifically learned a
+    shortcut for — so this check only applies to CharTokenizer.
+    """
+
     if not prompt:
         raise ValueError("prompt cannot be empty")
 

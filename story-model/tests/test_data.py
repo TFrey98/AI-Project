@@ -72,6 +72,30 @@ def test_build_tokenizer_builds_bpe_from_config():
     assert tokenizer.vocab_size <= 260
 
 
+def test_build_tokenizer_appends_configured_special_tokens():
+    tokenizer = build_tokenizer(
+        training_text="to be or not to be",
+        config={
+            "type": "byte_bpe",
+            "vocab_size": 260,
+            "min_frequency": 2,
+            "special_tokens": (
+                "<|user|>",
+                "<|assistant|>",
+            ),
+        },
+    )
+
+    assert isinstance(tokenizer, ByteBPETokenizer)
+    assert tokenizer.special_tokens == (
+        "<|user|>",
+        "<|assistant|>",
+    )
+    assert tokenizer.vocab_size == (
+        tokenizer.base_vocab_size + 2
+    )
+
+
 def test_tokenizer_from_dict_restores_bpe_tokenizer():
     trained = ByteBPETokenizer.train(
         "to be or not to be",

@@ -1,8 +1,21 @@
-"""Text tokenizers, dataset loading, and random batching."""
+"""Text tokenizers, dataset loading, and random batching.
+
+A language model never sees raw text — it sees a sequence of integers.
+A *tokenizer* is the (reversible) function that maps text -> integers and
+back. The choice of tokenizer is one of the highest-leverage decisions in
+building a language model: it determines the model's vocabulary size, how
+many "steps" it takes to read a given amount of text, and even what kinds
+of patterns are easy or hard for it to learn. This file implements two
+tokenizers of increasing sophistication (character-level, then byte-pair
+encoding) so their tradeoffs can be compared directly — see
+configs/transformer_small.yaml (char) vs configs/transformer_bpe.yaml (BPE)
+for the same architecture trained under each.
+"""
 
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,11 +28,32 @@ from story_model.corpus import sha256_text
 
 @dataclass
 class CharTokenizer:
+    """The simplest possible tokenizer: one token per character.
+
+    stoi ("string to integer") and itos ("integer to string") are inverse
+    lookup tables built from whatever characters actually appear in the
+    training text — so the vocabulary is exactly as large as the alphabet
+    of the corpus (for Shakespeare, ~65 characters: letters, punctuation,
+    whitespace). This has two big advantages for a small learning project:
+    it's trivial to reason about (every token is one visible character,
+    so model output is always human-readable) and it can never fail to
+    encode a character it's seen before. Its downside is that it forces
+    the model to spend a lot of its limited context window on very
+    low-level detail — predicting "t", then "h", then "e" one character
+    at a time is a much harder modeling problem than predicting the
+    single token "the" would be, which is exactly the gap byte-pair
+    encoding (below) is designed to close.
+    """
+
     stoi: dict[str, int]
     itos: dict[int, str]
 
     @classmethod
     def from_text(cls, text: str) -> "CharTokenizer":
+        # sorted(set(text)) gives a deterministic, reproducible ordering
+        # of the alphabet — using an unsorted set would make the token ids
+        # (and therefore any trained model's embedding table) depend on
+        # incidental set-iteration order, breaking reproducibility.
         chars = sorted(set(text))
         stoi = {ch: i for i, ch in enumerate(chars)}
         itos = {i: ch for ch, i in stoi.items()}
@@ -41,6 +75,13 @@ class CharTokenizer:
         )
 
     def to_dict(self) -> dict:
+        # Every tokenizer's to_dict() is embedded directly into training
+        # checkpoints (see train.py) so a checkpoint is fully
+        # self-describing: generate.py can later reconstruct the exact
+        # same encode/decode mapping without needing the original corpus
+        # on disk, or needing to know in advance which tokenizer type was
+        # used. The "type" field is what lets tokenizer_from_dict() below
+        # dispatch to the right class.
         return {
             "type": "char",
             "version": 1,
@@ -56,6 +97,9 @@ class CharTokenizer:
             raise ValueError("tokenizer data is not character-level")
 
         return cls(
+            # JSON object keys are always strings, so a checkpoint's
+            # itos={"0": "a", "1": "b", ...} needs its keys cast back to
+            # int before it's usable as a token-id lookup table again.
             stoi={
                 str(character): int(token_id)
                 for character, token_id in data["stoi"].items()
@@ -72,7 +116,16 @@ def merge_token_pair(
     pair: tuple[int, int],
     new_token: int,
 ) -> list[int]:
-    """Merge non-overlapping pair occurrences from left to right."""
+    """Replace every occurrence of `pair` in `tokens` with `new_token`.
+
+    This is the single operation byte-pair encoding (BPE) is built from —
+    both training a BPE tokenizer and using it to encode new text repeat
+    this merge step over and over (see ByteBPETokenizer below). Matches
+    are taken left to right and non-overlapping: once two tokens are
+    merged, the merged result isn't reconsidered as part of another pair
+    in the same pass (e.g. merging "aa" in "aaa" produces one merged
+    token plus one leftover "a", not two overlapping merges).
+    """
 
     merged: list[int] = []
     index = 0
@@ -94,10 +147,60 @@ def merge_token_pair(
 
 @dataclass
 class ByteBPETokenizer:
-    """UTF-8 byte tokenizer with learned byte-pair merges."""
+    """UTF-8 byte tokenizer with learned byte-pair merges.
 
+    Byte-Pair Encoding (BPE) is the tokenization scheme used by GPT-2/3/4,
+    LLaMA, and most modern LLMs. It starts from the 256 possible raw UTF-8
+    bytes as the base vocabulary (so, unlike CharTokenizer, it can NEVER
+    encounter a character it doesn't know how to represent — worst case it
+    falls back to spelling something out byte by byte), then learns to
+    "merge" frequently-adjacent byte pairs into new, single tokens: e.g.
+    if "t" and "h" appear next to each other very often in the training
+    text, BPE learns a "th" token; if "th" and "e" are then frequently
+    adjacent, it can go on to learn a "the" token. The result is a
+    vocabulary that automatically captures whatever frequent substrings
+    (often whole common words, for a large enough vocab_size) exist in the
+    training corpus, without any language-specific rules baked in.
+
+    Why this matters for the model: fewer, more meaningful tokens per unit
+    of text means the same context window (block_size) covers more actual
+    content, and the model spends its capacity predicting higher-level
+    units ("the") instead of low-level spelling ("t", "h", "e"). See
+    scripts/inspect_bpe.py for a tool that reports the resulting
+    bytes-per-token compression ratio on this project's corpus.
+    """
+
+    # merges[i] is the i-th pair learned, in the order it was learned.
+    # Order matters for both training and encoding: earlier merges were
+    # more frequent (and therefore get applied first), and later merges
+    # may reference token ids produced by earlier ones (e.g. merging
+    # "th" + "e" into "the" requires "th" to already exist as a token).
     merges: list[tuple[int, int]]
+
+    # Extra whole-string tokens layered ON TOP of the base byte/merge
+    # vocabulary — e.g. Phase 15's "<|user|>" control markers. Unlike a
+    # merge (which is only ever reachable by first tokenizing raw bytes
+    # and then repeatedly combining adjacent pairs), a special token is
+    # matched as a literal, atomic unit directly against the input text
+    # before BPE segmentation ever runs — see encode() below. This keeps
+    # control markers from ever being split apart the way ordinary BPE
+    # merging might otherwise split an arbitrary substring.
+    special_tokens: tuple[str, ...] = field(default_factory=tuple)
+
+    # An internal cache mapping every token id (0-255 for raw bytes, 256+
+    # for learned merges) to the literal bytes it expands to — built once
+    # in __post_init__ so decode() and token_byte_length() are O(1) dict
+    # lookups instead of having to walk the merge list every call.
+    # field(init=False) means dataclass's auto-generated __init__ doesn't
+    # accept it as a constructor argument; it's derived state, not input.
     _token_bytes: dict[int, bytes] = field(
+        init=False,
+        repr=False,
+    )
+    # Special-token text -> its assigned token id, built once alongside
+    # _token_bytes for the same reason: encode() needs to look this up on
+    # every call and shouldn't recompute it from scratch each time.
+    _special_to_id: dict[str, int] = field(
         init=False,
         repr=False,
     )
@@ -118,6 +221,12 @@ class ByteBPETokenizer:
             )
             new_token = 256 + rank
 
+            # Every merge must only reference tokens that already exist at
+            # the point it's applied (raw bytes, or earlier merges) — a
+            # merge referencing a not-yet-defined token id would be
+            # self-contradictory (or reference something learned later),
+            # which can only happen if a merges list was corrupted or
+            # hand-edited incorrectly.
             if not all(
                 0 <= token_id < new_token
                 for token_id in pair
@@ -134,18 +243,69 @@ class ByteBPETokenizer:
 
         self.merges = normalized_merges
 
+        # Validate and de-duplicate special tokens the same way merges
+        # were above — order is preserved (it determines assigned token
+        # ids below), and a duplicate would silently make two different
+        # ids ambiguous for the same text.
+        normalized_special_tokens: list[str] = []
+
+        for token in self.special_tokens:
+            if not isinstance(token, str):
+                raise TypeError(
+                    "each special token must be a string"
+                )
+
+            if not token:
+                raise ValueError(
+                    "special tokens cannot be empty"
+                )
+
+            if token in normalized_special_tokens:
+                raise ValueError(
+                    f"duplicate special token: {token!r}"
+                )
+
+            normalized_special_tokens.append(token)
+
+        self.special_tokens = tuple(
+            normalized_special_tokens
+        )
+
+        # Every raw byte value is its own one-byte token to start.
         token_bytes = {
             token_id: bytes([token_id])
             for token_id in range(256)
         }
 
+        # Each learned merge's byte representation is just the
+        # concatenation of its two parts' byte representations — this is
+        # what lets decode() turn token ids straight back into the exact
+        # original bytes, with no ambiguity or lossy step anywhere in the
+        # pipeline.
         for rank, pair in enumerate(self.merges):
             token_bytes[256 + rank] = (
                 token_bytes[pair[0]]
                 + token_bytes[pair[1]]
             )
 
+        # Special tokens are assigned ids continuing straight on from the
+        # last learned merge (base_vocab_size, base_vocab_size + 1, ...),
+        # so adding special tokens on top of an already-trained BPE
+        # vocabulary NEVER changes the meaning of any existing token id —
+        # see checkpoint.py's load_model_warm_start, which relies on
+        # exactly this property to preserve a model's already-learned
+        # embeddings when its vocabulary grows.
+        base_vocabulary_size = 256 + len(self.merges)
+        special_to_id = {
+            token: base_vocabulary_size + index
+            for index, token in enumerate(self.special_tokens)
+        }
+
+        for token, token_id in special_to_id.items():
+            token_bytes[token_id] = token.encode("utf-8")
+
         self._token_bytes = token_bytes
+        self._special_to_id = special_to_id
 
     @classmethod
     def train(
@@ -154,6 +314,19 @@ class ByteBPETokenizer:
         vocab_size: int = 512,
         min_frequency: int = 2,
     ) -> "ByteBPETokenizer":
+        """Learn merges greedily: repeatedly merge the most frequent pair.
+
+        This is the classic BPE training algorithm. Starting from raw
+        UTF-8 bytes, it repeats "count every adjacent pair, merge the most
+        frequent one, repeat" until either vocab_size is reached or no
+        pair occurs often enough to be worth merging (min_frequency). This
+        is a *greedy* algorithm — it always takes the locally-best merge
+        available at each step rather than searching for a globally
+        optimal vocabulary — which is standard for BPE and is what makes
+        it fast enough to run over a multi-megabyte corpus (see
+        scripts/build_corpus.py) in a reasonable amount of time.
+        """
+
         if not text:
             raise ValueError("BPE training text cannot be empty")
 
@@ -171,6 +344,9 @@ class ByteBPETokenizer:
         merges: list[tuple[int, int]] = []
 
         while 256 + len(merges) < vocab_size:
+            # Counter(zip(tokens, tokens[1:])) counts every adjacent pair
+            # in one pass — zip(tokens, tokens[1:]) is the standard
+            # Python idiom for "every consecutive pair in this sequence."
             pair_counts = Counter(
                 zip(tokens, tokens[1:])
             )
@@ -189,6 +365,13 @@ class ByteBPETokenizer:
             )
 
             if frequency < min_frequency:
+                # No remaining pair is common enough to justify spending a
+                # vocabulary slot on it — merging rare pairs would waste
+                # vocab_size on tokens that barely ever get reused, and
+                # rare substrings are exactly what would happen if
+                # training and encoding text differ (i.e. this is also a
+                # safeguard against overfitting the vocabulary to
+                # one-off noise in the training text).
                 break
 
             new_token = 256 + len(merges)
@@ -203,9 +386,55 @@ class ByteBPETokenizer:
 
     @property
     def vocab_size(self) -> int:
+        return self.base_vocab_size + len(self.special_tokens)
+
+    @property
+    def base_vocab_size(self) -> int:
+        # The vocabulary size BEFORE any special tokens are layered on
+        # top — i.e. exactly what vocab_size used to mean before Phase 15.
+        # This is what checkpoint.py's warm-start logic checks stays
+        # fixed: special tokens may only ever be ADDED at the end, never
+        # mixed into or resizing the learned byte/merge vocabulary itself.
         return 256 + len(self.merges)
 
-    def encode(self, text: str) -> list[int]:
+    @property
+    def special_token_ids(self) -> dict[str, int]:
+        return dict(self._special_to_id)
+
+    def with_special_tokens(
+        self,
+        special_tokens: list[str] | tuple[str, ...],
+    ) -> "ByteBPETokenizer":
+        """Return a new tokenizer with additional special tokens appended.
+
+        Already-present special tokens are left in their original
+        position (and therefore keep their original id) — only genuinely
+        new tokens are appended at the end. Because this returns a NEW
+        ByteBPETokenizer rather than mutating self, existing references to
+        the original tokenizer (and any ids it already assigned) remain
+        valid and unaffected.
+        """
+
+        combined = list(self.special_tokens)
+
+        for token in special_tokens:
+            if token not in combined:
+                combined.append(token)
+
+        return ByteBPETokenizer(
+            merges=list(self.merges),
+            special_tokens=tuple(combined),
+        )
+
+    def _encode_bpe_segment(self, text: str) -> list[int]:
+        # The original encode() logic, now applied only to the stretches
+        # of text BETWEEN special tokens (see encode() below) rather than
+        # unconditionally to the whole input. Encoding replays the SAME
+        # merges, in the SAME order they were learned, starting again from
+        # raw bytes — this is why merge order is stored and preserved:
+        # applying merges out of order (or a different subset) would
+        # produce a different, incompatible tokenization than what the
+        # model was trained on.
         tokens = list(text.encode("utf-8"))
 
         for rank, pair in enumerate(self.merges):
@@ -215,6 +444,55 @@ class ByteBPETokenizer:
                 256 + rank,
             )
 
+        return tokens
+
+    def encode(self, text: str) -> list[int]:
+        if not self.special_tokens:
+            return self._encode_bpe_segment(text)
+
+        # Special tokens are matched as literal substrings BEFORE any BPE
+        # segmentation runs, so "<|user|>" always becomes exactly one
+        # token id, never something BPE merging might otherwise split it
+        # into. Sorting longest-first (then by id, for determinism on
+        # ties) ensures that if one special token's text happens to be a
+        # prefix of another's (e.g. "<|turn|>" vs "<|turn|>end"), the
+        # LONGER, more specific match wins — the same "maximal munch"
+        # principle used by most tokenizers and lexers.
+        ordered_special_tokens = sorted(
+            self.special_tokens,
+            key=lambda token: (
+                -len(token),
+                self._special_to_id[token],
+            ),
+        )
+        pattern = re.compile(
+            "|".join(
+                re.escape(token)
+                for token in ordered_special_tokens
+            )
+        )
+
+        tokens: list[int] = []
+        position = 0
+
+        # Walk the text left to right: everything BEFORE each special-
+        # token match gets ordinary BPE encoding; the match itself becomes
+        # its single reserved token id; then continue past the match.
+        # Whatever text remains after the last match is BPE-encoded too.
+        for match in pattern.finditer(text):
+            tokens.extend(
+                self._encode_bpe_segment(
+                    text[position : match.start()]
+                )
+            )
+            tokens.append(
+                self._special_to_id[match.group(0)]
+            )
+            position = match.end()
+
+        tokens.extend(
+            self._encode_bpe_segment(text[position:])
+        )
         return tokens
 
     def decode(self, tokens: list[int]) -> str:
@@ -228,6 +506,14 @@ class ByteBPETokenizer:
 
             pieces.append(self._token_bytes[token_id])
 
+        # errors="replace" swaps any invalid byte sequence for the Unicode
+        # replacement character (U+FFFD) instead of raising. This matters
+        # because a model can, in principle, GENERATE a token sequence
+        # that doesn't correspond to any valid UTF-8 string (e.g. an
+        # incomplete multi-byte character at the very end of a sample) —
+        # decode() needs to degrade gracefully rather than crash the
+        # generation script over what's ultimately just a slightly
+        # malformed sample.
         return b"".join(pieces).decode(
             "utf-8",
             errors="replace",
@@ -244,11 +530,17 @@ class ByteBPETokenizer:
     def to_dict(self) -> dict:
         return {
             "type": "byte_bpe",
-            "version": 1,
+            # Bumped from 1 to 2 when special_tokens was added — this is
+            # what lets from_dict() below tell an older, pre-Phase-15
+            # checkpoint (implicitly version 1, no special tokens) apart
+            # from a newer one, and reject anything it doesn't recognize
+            # rather than silently misinterpreting unknown fields.
+            "version": 2,
             "merges": [
                 [left, right]
                 for left, right in self.merges
             ],
+            "special_tokens": list(self.special_tokens),
         }
 
     @classmethod
@@ -256,20 +548,50 @@ class ByteBPETokenizer:
         if data.get("type") != "byte_bpe":
             raise ValueError("tokenizer data is not byte-level BPE")
 
+        version = int(data.get("version", 1))
+
+        if version not in {1, 2}:
+            raise ValueError(
+                f"unsupported BPE tokenizer version: {version}"
+            )
+
         return cls(
             merges=[
                 (int(pair[0]), int(pair[1]))
                 for pair in data["merges"]
-            ]
+            ],
+            # .get(..., ()) is what makes this backward compatible with
+            # version-1 checkpoints saved before special_tokens existed —
+            # they simply get an empty tuple, i.e. "no special tokens,"
+            # which is exactly what those older checkpoints actually had.
+            special_tokens=tuple(
+                data.get("special_tokens", ())
+            ),
         )
 
 
+# A type alias, not a new class: anywhere the code says `Tokenizer`, it
+# means "either a CharTokenizer or a ByteBPETokenizer" — both expose the
+# same encode/decode/vocab_size/to_dict interface (Python doesn't enforce
+# this the way a formal Protocol or ABC would, but every caller in this
+# project treats the two classes interchangeably).
 Tokenizer = Union[CharTokenizer, ByteBPETokenizer]
 
 
 def split_text(
     text: str, train_split: float
 ) -> tuple[str, str]:
+    """Split one blob of raw text into a training prefix and validation suffix.
+
+    This is the "legacy" single-file splitting path (used by the original
+    tiny_shakespeare configs, before the project moved to the multi-document
+    corpus pipeline in corpus.py). It's a simple, deterministic prefix/suffix
+    split — no shuffling — so the same text and train_split always produce
+    the same split, which matters for reproducibility: a checkpoint's
+    training/validation data can always be reconstructed later from just
+    the config, with no separate record of which rows went where.
+    """
+
     if not 0.0 < train_split < 1.0:
         raise ValueError("train_split must be between 0 and 1")
 
@@ -289,6 +611,22 @@ def build_tokenizer(
     training_text: str,
     config: dict | None = None,
 ) -> Tokenizer:
+    """Construct a tokenizer from config, fitting it to TRAINING text only.
+
+    This function is always called with `training_text` — never the full
+    corpus, never the validation text — and that's deliberate, not
+    incidental. If the BPE merge vocabulary were learned from text that
+    includes the validation split, the tokenizer itself would have
+    "seen" validation data before evaluation ever ran, which is a subtle
+    form of data leakage: the resulting BPE vocabulary could end up
+    containing merges tuned to patterns that only occur in the supposedly
+    held-out text, inflating validation performance in a way that
+    wouldn't generalize to genuinely new text. Keeping tokenizer training
+    and model training both scoped to the same training split is what
+    makes the validation loss (see evaluate.py) a trustworthy estimate of
+    how the model performs on unseen text.
+    """
+
     config = config or {}
     tokenizer_type = config.get("type", "char")
 
@@ -296,12 +634,19 @@ def build_tokenizer(
         return CharTokenizer.from_text(training_text)
 
     if tokenizer_type == "byte_bpe":
+        # special_tokens (e.g. Phase 15's character control markers) are
+        # layered on AFTER training, via with_special_tokens — they're
+        # never part of what BPE training itself learns from corpus
+        # statistics, since they need fixed, predictable ids rather than
+        # ids that depend on how frequently they happen to appear in text.
         return ByteBPETokenizer.train(
             text=training_text,
             vocab_size=config.get("vocab_size", 512),
             min_frequency=config.get(
                 "min_frequency", 2
             ),
+        ).with_special_tokens(
+            tuple(config.get("special_tokens", ()))
         )
 
     raise ValueError(
@@ -310,6 +655,19 @@ def build_tokenizer(
 
 
 def tokenizer_from_dict(data: dict) -> Tokenizer:
+    """The inverse of `Tokenizer.to_dict()` — restores a tokenizer from a
+    checkpoint's saved metadata rather than retraining it from a corpus.
+
+    This is what lets generate.py and evaluate.py reproduce a model's
+    EXACT training-time vocabulary from just the checkpoint file, with no
+    dependency on the original corpus still existing on disk in the same
+    place, or on tokenizer training being deterministic enough to
+    reproduce bit-for-bit (BPE training over a large corpus, run twice, is
+    deterministic here — see the tie-breaking rule in
+    ByteBPETokenizer.train — but restoring from disk is still simpler,
+    faster, and more robust than depending on that).
+    """
+
     tokenizer_type = data.get("type", "char")
 
     if tokenizer_type == "char":
@@ -330,6 +688,16 @@ def load_text(path: str | Path) -> str:
 def load_corpus_manifest(
     data_config: dict,
 ) -> dict | None:
+    """Load the manifest a multi-document corpus was built with, if any.
+
+    See corpus.py for what the manifest records and why (document-level
+    provenance, SHA-256 hashes for leakage detection). Returns None for
+    configs that don't use the document-corpus pipeline at all (e.g. the
+    single-file tiny_shakespeare configs) — this function is meant to be
+    safe to call unconditionally rather than requiring every caller to
+    first check whether a manifest_path was configured.
+    """
+
     manifest_path = data_config.get("manifest_path")
 
     if manifest_path is None:
@@ -345,6 +713,19 @@ def validate_corpus_manifest(
     training_text: str,
     validation_text: str,
 ) -> dict | None:
+    """Verify the train/val text on disk still matches what the manifest recorded.
+
+    Hashing and comparing here protects against a specific, easy-to-make
+    mistake: rebuilding data/raw/ (adding, removing, or editing a source
+    document) without rerunning scripts/build_corpus.py, so
+    data/processed/train.txt and val.txt silently go stale relative to
+    manifest.json. Without this check, training would proceed on
+    mismatched data with no error — you'd only notice something was wrong
+    much later (or never), when metrics didn't match expectations. Raising
+    immediately, before any expensive training starts, turns a silent
+    correctness bug into a loud, immediate, cheap-to-fix one.
+    """
+
     manifest = load_corpus_manifest(data_config)
 
     if manifest is None:
@@ -374,7 +755,19 @@ def validate_corpus_manifest(
 def load_text_splits(
     data_config: dict,
 ) -> tuple[str, str]:
-    """Load explicit document splits or a legacy split from one file."""
+    """Load explicit document splits or a legacy split from one file.
+
+    This function is the single entry point train.py, evaluate.py, and
+    generate.py all use to obtain (training_text, validation_text),
+    regardless of which era of config format a given YAML file uses:
+    the newer `train_path`/`val_path`/`manifest_path` trio (multi-document
+    corpus, see corpus.py) or the older single `path` + `train_split`
+    (one file, split by position, see split_text() above). Centralizing
+    this choice here means every consumer gets manifest verification and
+    consistent error messages for free, instead of each script needing to
+    reimplement (and potentially get slightly wrong) the same branching
+    logic.
+    """
 
     has_path = "path" in data_config
     has_train_path = "train_path" in data_config
@@ -429,6 +822,12 @@ def load_text_splits(
 
 
 def train_test_split(data: torch.Tensor, train_split: float) -> tuple[torch.Tensor, torch.Tensor]:
+    # A tensor-level counterpart to split_text() above, kept for callers
+    # that already have encoded token ids rather than raw text (mainly
+    # test fixtures at this point — production training/evaluation code
+    # now splits text BEFORE tokenizing, via load_text_splits(), so that
+    # a BPE tokenizer's vocabulary is never fit on validation-adjacent
+    # bytes; see build_tokenizer()'s docstring for why that matters).
     n = int(train_split * len(data))
     return data[:n], data[n:]
 
@@ -436,6 +835,23 @@ def train_test_split(data: torch.Tensor, train_split: float) -> tuple[torch.Tens
 def get_batch(
     data: torch.Tensor, block_size: int, batch_size: int, device: str = "cpu"
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample `batch_size` random (input, target) windows for one training step.
+
+    Rather than walking through the corpus sequentially, every training
+    step draws `batch_size` independent random starting positions and
+    slices out a `block_size`-token window from each — this is what makes
+    each optimizer step see a fresh, unordered sample of the corpus, and
+    is standard practice for training on a single long text: there's no
+    natural notion of "epoch" here, just an effectively endless stream of
+    random windows. `y` is the same windows shifted one token to the
+    right, so y[i] is always the correct "next token" prediction for
+    x[i] — this shift is what turns a single text into a supervised
+    next-token-prediction dataset with no separate labels needed.
+    """
+
+    # randint's upper bound excludes block_size positions from the end of
+    # `data` so that data[i : i + block_size + 1] (needed for the target
+    # window y) never runs past the end of the tensor.
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([data[i : i + block_size] for i in ix])
     y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])

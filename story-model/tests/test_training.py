@@ -4,9 +4,11 @@ import pytest
 import torch
 
 from story_model.checkpoint import read_checkpoint
+from story_model.data import ByteBPETokenizer
 from story_model.train import (
     learning_rate_for_step,
     save_best_validation_checkpoint,
+    tokenizer_for_warm_start,
     validation_loss_improved,
 )
 
@@ -110,3 +112,52 @@ def test_best_checkpoint_records_evaluated_step(tmp_path):
     assert checkpoint["extra"]["best_validation_loss"] == 1.75
     assert checkpoint["extra"]["evaluation_completed_step"] == 500
     assert "evaluation_completed_step" not in metadata
+
+
+def test_warm_start_tokenizer_preserves_existing_ids():
+    source = ByteBPETokenizer(
+        merges=[(ord("a"), ord("b"))],
+        special_tokens=("<|existing|>",),
+    )
+    checkpoint = {
+        "extra": {"tokenizer": source.to_dict()}
+    }
+
+    restored, extended = tokenizer_for_warm_start(
+        checkpoint,
+        {
+            "type": "byte_bpe",
+            "vocab_size": source.base_vocab_size,
+            "special_tokens": (
+                "<|existing|>",
+                "<|new|>",
+            ),
+        },
+    )
+
+    assert restored.special_token_ids["<|existing|>"] == 257
+    assert extended.special_token_ids["<|existing|>"] == 257
+    assert extended.special_token_ids["<|new|>"] == 258
+
+
+def test_warm_start_tokenizer_rejects_special_token_reorder():
+    source = ByteBPETokenizer(
+        merges=[],
+        special_tokens=("<|first|>", "<|second|>"),
+    )
+    checkpoint = {
+        "extra": {"tokenizer": source.to_dict()}
+    }
+
+    with pytest.raises(ValueError, match="preserve existing"):
+        tokenizer_for_warm_start(
+            checkpoint,
+            {
+                "type": "byte_bpe",
+                "vocab_size": 256,
+                "special_tokens": (
+                    "<|second|>",
+                    "<|first|>",
+                ),
+            },
+        )

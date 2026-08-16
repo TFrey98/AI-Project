@@ -106,3 +106,77 @@ Training now writes `best.pt` whenever validation loss strictly
 improves. This checkpoint includes optimizer and RNG state and can be
 used with `--resume`; `final.pt` continues to represent the model after
 the complete configured update budget.
+
+## Phase 14 character context
+
+Phase 14 defines the data passed to a character before each response.
+The contract separates stable character canon from relationship state,
+the current scene, character-owned memories, scoped world knowledge,
+and recent conversation turns. A training record may also contain the
+target character response.
+
+An example is stored in `examples/character_context.json`. Load and
+serialize it with:
+
+```python
+from story_model.character_data import (
+    load_character_context,
+    serialize_character_prompt,
+    serialize_character_training_text,
+)
+
+context = load_character_context(
+    "examples/character_context.json"
+)
+prompt = serialize_character_prompt(context)
+training_text = serialize_character_training_text(context)
+```
+
+Serialization includes only memories owned by or shared with the
+active character. World facts must either be public or explicitly list
+the active character in `known_by`. Other characters' private memories
+and unknown world facts remain in storage but never enter the prompt.
+
+When a token budget is supplied, the serializer removes complete old
+turns from the beginning of the recent conversation. It never cuts a
+turn into a fragment and raises an error rather than silently removing
+the newest user message.
+
+The Phase 14 format is deliberately independent of a database and of
+the current tokenizer. Later phases will teach the tokenizer and model
+the same control markers and will add durable storage and retrieval.
+
+## Phase 15 control tokens and warm starts
+
+Phase 15 appends nine atomic character-control tokens to the existing
+byte-BPE vocabulary. The 512 learned byte/BPE token IDs remain
+unchanged; the new markers receive IDs 512 through 520. Character
+prompts also use a compact, readable field format rather than embedding
+the complete storage JSON.
+
+Inspect the expanded tokenizer, the compact example prompt, and a
+2,048-token RoPE model initialized from the Phase 13 checkpoint:
+
+```bash
+python scripts/inspect_character_tokens.py \
+  --checkpoint checkpoints/transformer_bpe_medium/best.pt \
+  --context examples/character_context.json \
+  --block-size 2048
+```
+
+The inspection is read-only. It verifies that every marker encodes as
+one token, that the complete prompt round-trips, and that all existing
+model rows are copied exactly while only the new vocabulary rows retain
+their fresh initialization.
+
+Training now distinguishes two checkpoint operations:
+
+- `--resume` restores an identical model, optimizer, step, schedule,
+  and random state.
+- `--warm-start` copies compatible model weights into a new vocabulary
+  or RoPE context length while starting a new optimizer and schedule at
+  update zero.
+
+Phase 16 will supply the first 2,048-token warm-start configuration and
+smoke test. Do not use `--warm-start` with an older training
+configuration that lacks the character special-token list.

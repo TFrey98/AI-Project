@@ -130,3 +130,64 @@ def test_character_tokenizer_serialization_roundtrip():
     assert restored.stoi == tokenizer.stoi
     assert restored.itos == tokenizer.itos
     assert restored.decode(restored.encode("cab")) == "cab"
+
+
+def test_bpe_special_tokens_are_atomic():
+    tokenizer = ByteBPETokenizer(
+        merges=[],
+        special_tokens=("<|user|>", "<|assistant|>"),
+    )
+
+    assert tokenizer.base_vocab_size == 256
+    assert tokenizer.vocab_size == 258
+    assert tokenizer.special_token_ids == {
+        "<|user|>": 256,
+        "<|assistant|>": 257,
+    }
+    assert tokenizer.encode("<|assistant|>") == [257]
+
+
+def test_bpe_special_token_mixed_text_roundtrip():
+    text = "<|user|>CafÃ©?<|assistant|>Oui."
+    tokenizer = ByteBPETokenizer(
+        merges=[],
+        special_tokens=("<|user|>", "<|assistant|>"),
+    )
+
+    encoded = tokenizer.encode(text)
+
+    assert 256 in encoded
+    assert 257 in encoded
+    assert tokenizer.decode(encoded) == text
+
+
+def test_bpe_prefers_longest_overlapping_special_token():
+    tokenizer = ByteBPETokenizer(
+        merges=[],
+        special_tokens=("<|turn|>", "<|turn|>end"),
+    )
+
+    assert tokenizer.encode("<|turn|>end") == [257]
+
+
+def test_bpe_special_tokens_survive_serialization():
+    tokenizer = ByteBPETokenizer(
+        merges=[(ord("a"), ord("b"))],
+        special_tokens=("<|user|>",),
+    )
+
+    restored = ByteBPETokenizer.from_dict(
+        tokenizer.to_dict()
+    )
+
+    assert restored.merges == tokenizer.merges
+    assert restored.special_tokens == tokenizer.special_tokens
+    assert restored.special_token_ids == tokenizer.special_token_ids
+
+
+def test_bpe_rejects_duplicate_special_tokens():
+    with pytest.raises(ValueError, match="duplicate special token"):
+        ByteBPETokenizer(
+            merges=[],
+            special_tokens=("<|user|>", "<|user|>"),
+        )
