@@ -87,6 +87,49 @@ def set_learning_rate(
         parameter_group["lr"] = learning_rate
 
 
+def validation_loss_improved(
+    validation_loss: float,
+    best_validation_loss: float | None,
+) -> bool:
+    """Return whether a finite validation loss is a strict improvement."""
+
+    return (
+        math.isfinite(validation_loss)
+        and (
+            best_validation_loss is None
+            or validation_loss < best_validation_loss
+        )
+    )
+
+
+def save_best_validation_checkpoint(
+    path: str | Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    step: int,
+    checkpoint_metadata: dict,
+    validation_loss: float,
+) -> None:
+    """Save a resumable checkpoint taken immediately after evaluation."""
+
+    best_metadata = dict(checkpoint_metadata)
+    best_metadata.update(
+        {
+            "best_validation_loss": validation_loss,
+            "best_step": step,
+            "evaluation_completed_step": step,
+        }
+    )
+
+    save_checkpoint(
+        path,
+        model,
+        optimizer,
+        step,
+        extra=best_metadata,
+    )
+
+
 @torch.no_grad()
 def estimate_loss(
     model: torch.nn.Module,
@@ -182,6 +225,7 @@ def train(
     )
 
     tokenizer_data = None
+    resume_checkpoint = None
 
     if resume_path is not None:
         resume_checkpoint = read_checkpoint(
@@ -240,6 +284,9 @@ def train(
     )
 
     start_step = 0
+    best_validation_loss = None
+    best_step = None
+    evaluation_completed_step = None
 
     if resume_path is not None:
         checkpoint = load_checkpoint(
@@ -253,6 +300,30 @@ def train(
         start_step = int(
             checkpoint.get("step", 0)
         )
+
+        checkpoint_extra = checkpoint.get("extra", {})
+        saved_best_validation_loss = checkpoint_extra.get(
+            "best_validation_loss"
+        )
+
+        if saved_best_validation_loss is not None:
+            best_validation_loss = float(
+                saved_best_validation_loss
+            )
+
+        saved_best_step = checkpoint_extra.get("best_step")
+
+        if saved_best_step is not None:
+            best_step = int(saved_best_step)
+
+        saved_evaluation_step = checkpoint_extra.get(
+            "evaluation_completed_step"
+        )
+
+        if saved_evaluation_step is not None:
+            evaluation_completed_step = int(
+                saved_evaluation_step
+            )
 
         saved_config = (
             checkpoint
@@ -289,6 +360,14 @@ def train(
         # and dropout streams.
         seed_everything(train_config["seed"])
 
+    if best_validation_loss is not None:
+        checkpoint_metadata["best_validation_loss"] = (
+            best_validation_loss
+        )
+
+    if best_step is not None:
+        checkpoint_metadata["best_step"] = best_step
+
     print(f"device: {device}")
     print(f"parameters: {parameter_count:,}")
     print(f"tokenizer: {tokenizer.to_dict()['type']}")
@@ -321,6 +400,10 @@ def train(
     eval_interval = train_config["eval_interval"]
     eval_iters = train_config["eval_iters"]
     save_interval = checkpoint_config["save_interval"]
+    best_path = (
+        Path(checkpoint_config["dir"])
+        / "best.pt"
+    )
 
     peak_memory = current_memory_bytes(device)
     tokens_since_log = 0
@@ -345,7 +428,14 @@ def train(
             learning_rate,
         )
 
-        if step % eval_interval == 0:
+        evaluation_already_completed = (
+            evaluation_completed_step == step
+        )
+
+        if (
+            step % eval_interval == 0
+            and not evaluation_already_completed
+        ):
             synchronize_device(device)
 
             losses = estimate_loss(
@@ -367,9 +457,38 @@ def train(
                 f"lr {learning_rate:.6g}"
             )
 
+            if validation_loss_improved(
+                losses["val"],
+                best_validation_loss,
+            ):
+                best_validation_loss = losses["val"]
+                best_step = step
+                checkpoint_metadata[
+                    "best_validation_loss"
+                ] = best_validation_loss
+                checkpoint_metadata["best_step"] = best_step
+
+                save_best_validation_checkpoint(
+                    path=best_path,
+                    model=model,
+                    optimizer=optimizer,
+                    step=step,
+                    checkpoint_metadata=checkpoint_metadata,
+                    validation_loss=best_validation_loss,
+                )
+
+                print(
+                    "new best: "
+                    f"val loss {best_validation_loss:.4f} "
+                    f"at update {best_step}"
+                )
+
             # Exclude evaluation time from throughput.
             tokens_since_log = 0
             timing_started = time.perf_counter()
+
+        if evaluation_already_completed:
+            evaluation_completed_step = None
 
         inputs, targets = get_batch(
             train_data,
@@ -482,6 +601,26 @@ def train(
         / "final.pt"
     )
 
+    if validation_loss_improved(
+        final_losses["val"],
+        best_validation_loss,
+    ):
+        best_validation_loss = final_losses["val"]
+        best_step = max_steps
+        checkpoint_metadata["best_validation_loss"] = (
+            best_validation_loss
+        )
+        checkpoint_metadata["best_step"] = best_step
+
+        save_best_validation_checkpoint(
+            path=best_path,
+            model=model,
+            optimizer=optimizer,
+            step=max_steps,
+            checkpoint_metadata=checkpoint_metadata,
+            validation_loss=best_validation_loss,
+        )
+
     save_checkpoint(
         final_path,
         model,
@@ -499,6 +638,11 @@ def train(
         f"observed peak tensor memory: "
         f"{peak_memory / (1024**2):.1f} MiB"
     )
+    print(
+        f"best: val loss {best_validation_loss:.4f} "
+        f"at update {best_step}"
+    )
+    print(f"best checkpoint: {best_path}")
     print(f"checkpoint: {final_path}")
 
 

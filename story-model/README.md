@@ -82,3 +82,27 @@ python -m story_model.evaluate \
   --data-config configs/transformer_bpe_corpus.yaml \
   --split val
 ```
+
+## Phase 13 medium model
+
+Phase 13 increases the model to 2,863,616 parameters and doubles the
+context to 256 BPE tokens. The smoke and full configurations preserve
+the Phase 12 corpus, tokenizer settings, and number of sampled tokens
+per update.
+
+```bash
+python -m story_model.train \
+  --config configs/transformer_bpe_medium_smoke.yaml
+```
+
+After the smoke test passes:
+
+```bash
+python -m story_model.train \
+  --config configs/transformer_bpe_medium.yaml
+```
+
+Training now writes `best.pt` whenever validation loss strictly
+improves. This checkpoint includes optimizer and RNG state and can be
+used with `--resume`; `final.pt` continues to represent the model after
+the complete configured update budget.

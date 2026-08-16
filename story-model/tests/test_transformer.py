@@ -604,3 +604,25 @@ def test_invalid_feed_forward_activation_is_rejected():
         match="feed_forward_activation must be",
     ):
         make_model(feed_forward_activation="relu")
+
+
+def test_phase13_medium_model_parameter_count():
+    model = TransformerLanguageModel(
+        vocabulary_size=512,
+        block_size=256,
+        embedding_dim=192,
+        attention_heads=6,
+        layers=6,
+        feed_forward_dim=768,
+        dropout=0.1,
+        position_encoding="rope",
+        normalization="layernorm",
+        feed_forward_activation="swiglu",
+    )
+
+    parameter_count = sum(
+        parameter.numel()
+        for parameter in model.parameters()
+    )
+
+    assert parameter_count == 2_863_616
