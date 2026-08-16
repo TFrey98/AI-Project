@@ -55,6 +55,18 @@ def build_model(
                 "dropout",
                 0.1,
             ),
+            position_encoding=model_config.get(
+                "position_encoding",
+                "learned",
+            ),
+            normalization=model_config.get(
+                "normalization",
+                "layernorm",
+            ),
+            feed_forward_activation=model_config.get(
+                "feed_forward_activation",
+                "gelu",
+            ),
         )
 
     raise ValueError(f"Unknown model name: {name!r}")

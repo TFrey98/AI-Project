@@ -1,4 +1,4 @@
-"""Generate deterministic text from a trained checkpoint."""
+"""Generate controlled text from a trained checkpoint."""
 
 from __future__ import annotations
 
@@ -9,18 +9,26 @@ import torch
 import yaml
 
 from story_model.checkpoint import read_checkpoint
-from story_model.data import CharTokenizer, load_text
+from story_model.data import (
+    CharTokenizer,
+    Tokenizer,
+    build_tokenizer,
+    load_text,
+    split_text,
+    tokenizer_from_dict,
+)
 from story_model.models import build_model
 from story_model.runtime import (
     resolve_device,
     seed_everything,
 )
+from story_model.sampling import generate_tokens
 
 
 def load_generation_metadata(
     checkpoint: dict,
     config_path: str | None,
-) -> tuple[dict, CharTokenizer]:
+) -> tuple[dict, Tokenizer]:
     extra = checkpoint.get("extra", {})
 
     config = extra.get("config")
@@ -40,15 +48,42 @@ def load_generation_metadata(
         )
 
     if tokenizer_data is not None:
-        tokenizer = CharTokenizer(
-            stoi=tokenizer_data["stoi"],
-            itos=tokenizer_data["itos"],
+        tokenizer = tokenizer_from_dict(
+            tokenizer_data
         )
     else:
         text = load_text(config["data"]["path"])
-        tokenizer = CharTokenizer.from_text(text)
+        training_text, _ = split_text(
+            text,
+            config["data"]["train_split"],
+        )
+        tokenizer = build_tokenizer(
+            training_text=training_text,
+            config=config.get("tokenizer"),
+        )
 
     return config, tokenizer
+
+
+def encode_prompt(
+    tokenizer: Tokenizer,
+    prompt: str,
+) -> list[int]:
+    if not prompt:
+        raise ValueError("prompt cannot be empty")
+
+    if isinstance(tokenizer, CharTokenizer):
+        unknown = sorted(
+            set(prompt) - set(tokenizer.stoi)
+        )
+
+        if unknown:
+            raise ValueError(
+                "Prompt contains characters outside the "
+                f"checkpoint vocabulary: {unknown!r}"
+            )
+
+    return tokenizer.encode(prompt)
 
 
 def generate(
@@ -56,6 +91,10 @@ def generate(
     max_new_tokens: int,
     seed: int,
     config_path: str | None = None,
+    prompt: str = "\n",
+    temperature: float = 1.0,
+    top_k: int | None = None,
+    greedy: bool = False,
 ) -> str:
     checkpoint = read_checkpoint(
         checkpoint_path,
@@ -84,19 +123,29 @@ def generate(
     model = model.to(device)
     model.eval()
 
-    # Seed after model construction and checkpoint loading so only
-    # generation consumes the deterministic random sequence.
+    # Seed after construction and loading so only decoding consumes
+    # this deterministic random sequence.
     seed_everything(seed)
 
-    starting_tokens = torch.zeros(
-        (1, 1),
+    prompt_tokens = encode_prompt(
+        tokenizer,
+        prompt,
+    )
+
+    starting_tokens = torch.tensor(
+        [prompt_tokens],
         dtype=torch.long,
         device=device,
     )
 
-    output = model.generate(
-        starting_tokens,
+    output = generate_tokens(
+        model=model,
+        starting_tokens=starting_tokens,
         max_new_tokens=max_new_tokens,
+        block_size=config["data"]["block_size"],
+        temperature=temperature,
+        top_k=top_k,
+        greedy=greedy,
     )
 
     token_ids = output[0].cpu().tolist()
@@ -122,6 +171,12 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--prompt",
+        default="\n",
+        help="Text used to begin generation.",
+    )
+
+    parser.add_argument(
         "--max-new-tokens",
         type=int,
         default=200,
@@ -133,14 +188,38 @@ def main() -> None:
         default=1337,
     )
 
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Positive sampling temperature.",
+    )
+
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Sample only from the k highest-scoring tokens.",
+    )
+
+    parser.add_argument(
+        "--greedy",
+        action="store_true",
+        help="Always choose the highest-scoring token.",
+    )
+
     args = parser.parse_args()
 
     print(
         generate(
             checkpoint_path=args.checkpoint,
             config_path=args.config,
+            prompt=args.prompt,
             max_new_tokens=args.max_new_tokens,
             seed=args.seed,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            greedy=args.greedy,
         )
     )
 

@@ -60,3 +60,45 @@ def test_checkpoint_restores_cpu_rng(tmp_path):
         expected_random_values,
         actual_random_values,
     )
+def test_save_and_load_roundtrip(tmp_path):
+    model = BigramLanguageModel(vocabulary_size=10)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=1e-3,
+    )
+
+    path = tmp_path / "checkpoints" / "test.pt"
+
+    save_checkpoint(
+        path,
+        model,
+        optimizer,
+        step=42,
+        extra={"note": "test"},
+    )
+
+    assert path.exists()
+
+    loaded_model = BigramLanguageModel(
+        vocabulary_size=10
+    )
+    loaded_optimizer = torch.optim.AdamW(
+        loaded_model.parameters(),
+        lr=1e-3,
+    )
+
+    checkpoint = load_checkpoint(
+        path,
+        loaded_model,
+        loaded_optimizer,
+        map_location="cpu",
+    )
+
+    assert checkpoint["step"] == 42
+    assert checkpoint["extra"] == {"note": "test"}
+
+    for original, loaded in zip(
+        model.parameters(),
+        loaded_model.parameters(),
+    ):
+        assert torch.equal(original, loaded)

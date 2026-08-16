@@ -15,10 +15,10 @@ from story_model.checkpoint import (
     save_checkpoint,
 )
 from story_model.data import (
-    CharTokenizer,
+    build_tokenizer,
     get_batch,
     load_text,
-    train_test_split,
+    split_text,
 )
 from story_model.models import build_model
 from story_model.runtime import (
@@ -176,17 +176,23 @@ def train(
     device = resolve_device(train_config["device"])
 
     text = load_text(data_config["path"])
-    tokenizer = CharTokenizer.from_text(text)
-
-    encoded = tokenizer.encode(text)
-    data = torch.tensor(
-        encoded,
-        dtype=torch.long,
+    training_text, validation_text = split_text(
+        text,
+        data_config["train_split"],
     )
 
-    train_data, val_data = train_test_split(
-        data,
-        data_config["train_split"],
+    tokenizer = build_tokenizer(
+        training_text=training_text,
+        config=config.get("tokenizer"),
+    )
+
+    train_data = torch.tensor(
+        tokenizer.encode(training_text),
+        dtype=torch.long,
+    )
+    val_data = torch.tensor(
+        tokenizer.encode(validation_text),
+        dtype=torch.long,
     )
 
     model = build_model(
@@ -248,6 +254,13 @@ def train(
         print(
             f"completed steps: {start_step}"
         )
+
+    else:
+        # Model construction consumes a different number of random
+        # values for different architectures. Reset before evaluation
+        # and training so matched experiments see identical batches
+        # and dropout streams.
+        seed_everything(train_config["seed"])
 
     print(f"device: {device}")
     print(f"parameters: {parameter_count:,}")
@@ -404,10 +417,7 @@ def train(
                 completed_steps,
                 extra={
                     "config": config,
-                    "tokenizer": {
-                        "stoi": tokenizer.stoi,
-                        "itos": tokenizer.itos,
-                    },
+                    "tokenizer": tokenizer.to_dict(),
                 },
             )
 
@@ -438,10 +448,7 @@ def train(
         max_steps,
         extra={
             "config": config,
-            "tokenizer": {
-                "stoi": tokenizer.stoi,
-                "itos": tokenizer.itos,
-            },
+            "tokenizer": tokenizer.to_dict(),
         },
     )
 
@@ -482,4 +489,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    
