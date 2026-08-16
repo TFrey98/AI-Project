@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Union
 
 import torch
+
+from story_model.corpus import sha256_text
 
 
 @dataclass
@@ -267,8 +270,19 @@ Tokenizer = Union[CharTokenizer, ByteBPETokenizer]
 def split_text(
     text: str, train_split: float
 ) -> tuple[str, str]:
+    if not 0.0 < train_split < 1.0:
+        raise ValueError("train_split must be between 0 and 1")
+
     n = int(train_split * len(text))
-    return text[:n], text[n:]
+    training_text = text[:n]
+    validation_text = text[n:]
+
+    if not training_text or not validation_text:
+        raise ValueError(
+            "text split must produce non-empty train and validation data"
+        )
+
+    return training_text, validation_text
 
 
 def build_tokenizer(
@@ -311,6 +325,107 @@ def tokenizer_from_dict(data: dict) -> Tokenizer:
 
 def load_text(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
+
+
+def load_corpus_manifest(
+    data_config: dict,
+) -> dict | None:
+    manifest_path = data_config.get("manifest_path")
+
+    if manifest_path is None:
+        return None
+
+    return json.loads(
+        Path(manifest_path).read_text(encoding="utf-8")
+    )
+
+
+def validate_corpus_manifest(
+    data_config: dict,
+    training_text: str,
+    validation_text: str,
+) -> dict | None:
+    manifest = load_corpus_manifest(data_config)
+
+    if manifest is None:
+        return None
+
+    for split_name, text in (
+        ("train", training_text),
+        ("val", validation_text),
+    ):
+        expected_hash = (
+            manifest.get(split_name, {}).get("sha256")
+        )
+
+        if expected_hash is None:
+            raise ValueError(
+                f"corpus manifest is missing {split_name} SHA-256"
+            )
+
+        if sha256_text(text) != expected_hash:
+            raise ValueError(
+                f"{split_name} corpus does not match its manifest"
+            )
+
+    return manifest
+
+
+def load_text_splits(
+    data_config: dict,
+) -> tuple[str, str]:
+    """Load explicit document splits or a legacy split from one file."""
+
+    has_path = "path" in data_config
+    has_train_path = "train_path" in data_config
+    has_val_path = "val_path" in data_config
+
+    if has_path and (has_train_path or has_val_path):
+        raise ValueError(
+            "data config cannot combine path with train_path/val_path"
+        )
+
+    if has_train_path != has_val_path:
+        raise ValueError(
+            "data config must provide both train_path and val_path"
+        )
+
+    if has_train_path:
+        training_text = load_text(data_config["train_path"])
+        validation_text = load_text(data_config["val_path"])
+
+        if not training_text or not validation_text:
+            raise ValueError(
+                "train and validation files must both be non-empty"
+            )
+
+        validate_corpus_manifest(
+            data_config,
+            training_text,
+            validation_text,
+        )
+
+        return training_text, validation_text
+
+    if has_path:
+        if "manifest_path" in data_config:
+            raise ValueError(
+                "manifest_path requires explicit train_path/val_path"
+            )
+
+        if "train_split" not in data_config:
+            raise ValueError(
+                "single-file data config requires train_split"
+            )
+
+        return split_text(
+            load_text(data_config["path"]),
+            float(data_config["train_split"]),
+        )
+
+    raise ValueError(
+        "data config requires path or train_path/val_path"
+    )
 
 
 def train_test_split(data: torch.Tensor, train_split: float) -> tuple[torch.Tensor, torch.Tensor]:

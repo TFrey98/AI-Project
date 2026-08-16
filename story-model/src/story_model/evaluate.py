@@ -4,14 +4,40 @@ from __future__ import annotations
 
 import argparse
 import math
+from pathlib import Path
 
 import torch
+import yaml
 
 from story_model.checkpoint import read_checkpoint
-from story_model.data import load_text, split_text
+from story_model.data import load_text_splits
 from story_model.generate import load_generation_metadata
 from story_model.models import build_model
 from story_model.runtime import resolve_device
+
+
+def read_evaluation_data_config(
+    config_path: str,
+) -> dict:
+    """Read a full training config or a data-only YAML mapping."""
+
+    loaded = yaml.safe_load(
+        Path(config_path).read_text(encoding="utf-8")
+    )
+
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            "evaluation data config must be a YAML mapping"
+        )
+
+    data_config = loaded.get("data", loaded)
+
+    if not isinstance(data_config, dict):
+        raise ValueError(
+            "evaluation data section must be a YAML mapping"
+        )
+
+    return data_config
 
 
 def calculate_bits_per_byte(
@@ -136,6 +162,7 @@ def evaluate_checkpoint(
     config_path: str | None = None,
     split: str = "both",
     device_name: str | None = None,
+    data_config: dict | None = None,
 ) -> dict:
     if split not in {"train", "val", "both"}:
         raise ValueError(
@@ -169,10 +196,13 @@ def evaluate_checkpoint(
     )
     model = model.to(device)
 
-    text = load_text(config["data"]["path"])
-    train_text, val_text = split_text(
-        text,
-        config["data"]["train_split"],
+    evaluation_data_config = (
+        data_config
+        if data_config is not None
+        else config["data"]
+    )
+    train_text, val_text = load_text_splits(
+        evaluation_data_config
     )
 
     train_encoded = tokenizer.encode(train_text)
@@ -202,6 +232,7 @@ def evaluate_checkpoint(
         "checkpoint": checkpoint_path,
         "step": int(checkpoint.get("step", 0)),
         "device": str(device),
+        "data_override": data_config is not None,
         "splits": {},
     }
 
@@ -210,7 +241,12 @@ def evaluate_checkpoint(
             model=model,
             data=available_splits[split_name],
             block_size=config["data"]["block_size"],
-            batch_size=config["data"]["batch_size"],
+            batch_size=int(
+                evaluation_data_config.get(
+                    "batch_size",
+                    config["data"]["batch_size"],
+                )
+            ),
             device=device,
         )
 
@@ -259,6 +295,15 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--data-config",
+        default=None,
+        help=(
+            "Optional full or data-only YAML config whose corpus "
+            "replaces the checkpoint corpus for cross-evaluation."
+        ),
+    )
+
+    parser.add_argument(
         "--device",
         default=None,
         help="Optional device override: auto, cpu, mps, or cuda.",
@@ -266,16 +311,26 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    evaluation_data_config = (
+        read_evaluation_data_config(args.data_config)
+        if args.data_config is not None
+        else None
+    )
+
     results = evaluate_checkpoint(
         checkpoint_path=args.checkpoint,
         config_path=args.config,
         split=args.split,
         device_name=args.device,
+        data_config=evaluation_data_config,
     )
 
     print(f"checkpoint: {results['checkpoint']}")
     print(f"completed updates: {results['step']}")
     print(f"device: {results['device']}")
+
+    if args.data_config is not None:
+        print(f"evaluation data: {args.data_config}")
 
     for split_name, metrics in results["splits"].items():
         print(

@@ -12,13 +12,15 @@ import yaml
 
 from story_model.checkpoint import (
     load_checkpoint,
+    read_checkpoint,
     save_checkpoint,
 )
 from story_model.data import (
     build_tokenizer,
     get_batch,
-    load_text,
-    split_text,
+    load_corpus_manifest,
+    load_text_splits,
+    tokenizer_from_dict,
 )
 from story_model.models import build_model
 from story_model.runtime import (
@@ -175,16 +177,41 @@ def train(
     seed_everything(train_config["seed"])
     device = resolve_device(train_config["device"])
 
-    text = load_text(data_config["path"])
-    training_text, validation_text = split_text(
-        text,
-        data_config["train_split"],
+    training_text, validation_text = load_text_splits(
+        data_config
     )
 
-    tokenizer = build_tokenizer(
-        training_text=training_text,
-        config=config.get("tokenizer"),
-    )
+    tokenizer_data = None
+
+    if resume_path is not None:
+        resume_checkpoint = read_checkpoint(
+            resume_path,
+            map_location="cpu",
+        )
+        tokenizer_data = (
+            resume_checkpoint
+            .get("extra", {})
+            .get("tokenizer")
+        )
+
+    if tokenizer_data is not None:
+        tokenizer = tokenizer_from_dict(tokenizer_data)
+    else:
+        tokenizer = build_tokenizer(
+            training_text=training_text,
+            config=config.get("tokenizer"),
+        )
+
+    checkpoint_metadata = {
+        "config": config,
+        "tokenizer": tokenizer.to_dict(),
+    }
+    corpus_manifest = load_corpus_manifest(data_config)
+
+    if corpus_manifest is not None:
+        checkpoint_metadata["corpus_manifest"] = (
+            corpus_manifest
+        )
 
     train_data = torch.tensor(
         tokenizer.encode(training_text),
@@ -264,12 +291,29 @@ def train(
 
     print(f"device: {device}")
     print(f"parameters: {parameter_count:,}")
+    print(f"tokenizer: {tokenizer.to_dict()['type']}")
     print(f"vocabulary: {tokenizer.vocab_size}")
     print(
         f"training tokens: {len(train_data):,}"
     )
     print(
         f"validation tokens: {len(val_data):,}"
+    )
+    print(
+        "training UTF-8 bytes: "
+        f"{len(training_text.encode('utf-8')):,}"
+    )
+    print(
+        "validation UTF-8 bytes: "
+        f"{len(validation_text.encode('utf-8')):,}"
+    )
+    print(
+        "training bytes/token: "
+        f"{len(training_text.encode('utf-8')) / len(train_data):.3f}"
+    )
+    print(
+        "validation bytes/token: "
+        f"{len(validation_text.encode('utf-8')) / len(val_data):.3f}"
     )
 
     block_size = data_config["block_size"]
@@ -415,10 +459,7 @@ def train(
                 model,
                 optimizer,
                 completed_steps,
-                extra={
-                    "config": config,
-                    "tokenizer": tokenizer.to_dict(),
-                },
+                extra=checkpoint_metadata,
             )
 
             # Exclude checkpoint writing from throughput.
@@ -446,10 +487,7 @@ def train(
         model,
         optimizer,
         max_steps,
-        extra={
-            "config": config,
-            "tokenizer": tokenizer.to_dict(),
-        },
+        extra=checkpoint_metadata,
     )
 
     print(

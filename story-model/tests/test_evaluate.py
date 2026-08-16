@@ -6,6 +6,7 @@ import torch
 from story_model.evaluate import (
     calculate_bits_per_byte,
     evaluate_token_stream,
+    read_evaluation_data_config,
 )
 from story_model.models.bigram import BigramLanguageModel
 
@@ -93,3 +94,55 @@ def test_bits_per_byte_rejects_empty_byte_count():
             token_count=10,
             byte_count=0,
         )
+
+
+def test_evaluation_data_config_reads_full_training_config(tmp_path):
+    config_path = tmp_path / "training.yaml"
+    config_path.write_text(
+        "data:\n"
+        "  train_path: data/processed/train.txt\n"
+        "  val_path: data/processed/val.txt\n"
+        "  batch_size: 8\n",
+        encoding="utf-8",
+    )
+
+    data_config = read_evaluation_data_config(
+        str(config_path)
+    )
+
+    assert data_config["train_path"] == (
+        "data/processed/train.txt"
+    )
+    assert data_config["val_path"] == (
+        "data/processed/val.txt"
+    )
+    assert data_config["batch_size"] == 8
+
+
+def test_evaluation_data_config_reads_data_only_mapping(tmp_path):
+    config_path = tmp_path / "data.yaml"
+    config_path.write_text(
+        "path: data/input.txt\n"
+        "train_split: 0.9\n",
+        encoding="utf-8",
+    )
+
+    data_config = read_evaluation_data_config(
+        str(config_path)
+    )
+
+    assert data_config == {
+        "path": "data/input.txt",
+        "train_split": 0.9,
+    }
+
+
+def test_evaluation_data_config_rejects_non_mapping(tmp_path):
+    config_path = tmp_path / "invalid.yaml"
+    config_path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="must be a YAML mapping",
+    ):
+        read_evaluation_data_config(str(config_path))

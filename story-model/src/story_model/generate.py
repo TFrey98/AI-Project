@@ -13,8 +13,7 @@ from story_model.data import (
     CharTokenizer,
     Tokenizer,
     build_tokenizer,
-    load_text,
-    split_text,
+    load_text_splits,
     tokenizer_from_dict,
 )
 from story_model.models import build_model
@@ -52,10 +51,8 @@ def load_generation_metadata(
             tokenizer_data
         )
     else:
-        text = load_text(config["data"]["path"])
-        training_text, _ = split_text(
-            text,
-            config["data"]["train_split"],
+        training_text, _ = load_text_splits(
+            config["data"]
         )
         tokenizer = build_tokenizer(
             training_text=training_text,
