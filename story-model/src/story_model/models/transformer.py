@@ -840,6 +840,9 @@ class TransformerLanguageModel(nn.Module):
                     vocabulary,
                 ),
                 targets.reshape(batch * sequence),
+                # Character fine-tuning uses -100 for prompt and padding
+                # positions so only the target response contributes loss.
+                ignore_index=-100,
             )
 
         return logits, loss

@@ -19,10 +19,18 @@ import argparse
 import math
 import time
 from pathlib import Path
+from typing import Union
 
 import torch
 import yaml
 
+from story_model.character_training import (
+    RESPONSE_IGNORE_INDEX,
+    EncodedCharacterExample,
+    encode_character_training_records,
+    get_character_batch,
+    load_character_dataset_splits,
+)
 from story_model.checkpoint import (
     load_checkpoint,
     load_model_warm_start,
@@ -44,6 +52,20 @@ from story_model.runtime import (
     seed_everything,
     synchronize_device,
 )
+
+
+# Training data comes in two shapes depending on data_config["type"]: a
+# flat token stream (plain-text pretraining, sampled by get_batch) or a
+# tuple of pre-encoded, response-masked character examples (see
+# character_training.py, sampled by get_character_batch instead). Both
+# shapes flow through the SAME training loop below — get_training_batch
+# is the one place that dispatches between them — so warm-starting,
+# checkpointing, the LR schedule, and gradient clipping don't need to
+# know or care which kind of data a given run is using.
+TrainingData = Union[
+    torch.Tensor,
+    tuple[EncodedCharacterExample, ...],
+]
 
 
 def learning_rate_for_step(
@@ -160,6 +182,37 @@ def validation_loss_improved(
             or validation_loss < best_validation_loss
         )
     )
+
+
+def early_stopping_reached(
+    evaluations_without_improvement: int,
+    patience: int | None,
+) -> bool:
+    """Return whether consecutive non-improving evaluations hit patience.
+
+    Early stopping is what actually protects against the overfitting the
+    Phase 18 smoke run demonstrated: rather than training for a fixed
+    step count and hoping the final checkpoint happens to be good,
+    training here keeps going only as long as validation loss is still
+    improving, and stops once it's gone `patience` evaluations in a row
+    without a new best — at which point continuing would just be
+    memorizing training data harder while held-out performance stays
+    flat or gets worse. patience=None (the default) disables the check
+    entirely, letting a run train for its full max_steps budget
+    regardless of validation trend, useful for the small ablation/smoke
+    configs where you want to observe overfitting rather than stop it.
+    """
+
+    if evaluations_without_improvement < 0:
+        raise ValueError(
+            "evaluations_without_improvement cannot be negative"
+        )
+    if patience is None:
+        return False
+    if patience < 1:
+        raise ValueError("early-stopping patience must be positive")
+
+    return evaluations_without_improvement >= patience
 
 
 def save_best_validation_checkpoint(
@@ -297,11 +350,42 @@ def tokenizer_for_warm_start(
     return source_tokenizer, destination_tokenizer
 
 
+def get_training_batch(
+    data: TrainingData,
+    block_size: int,
+    batch_size: int,
+    device: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Dispatch to continuous-text or response-masked batching.
+
+    A plain torch.Tensor means this is a flat pretraining token stream, so
+    it's sampled with get_batch's random-window approach. Anything else is
+    a tuple of pre-encoded EncodedCharacterExample records (see
+    character_training.py), sampled with get_character_batch instead —
+    those are already fixed-width and response-masked, so there's no
+    "random window" to slice, only which whole examples to draw.
+    """
+
+    if isinstance(data, torch.Tensor):
+        return get_batch(
+            data,
+            block_size,
+            batch_size,
+            device,
+        )
+
+    return get_character_batch(
+        data,
+        batch_size,
+        device,
+    )
+
+
 @torch.no_grad()
 def estimate_loss(
     model: torch.nn.Module,
-    train_data: torch.Tensor,
-    val_data: torch.Tensor,
+    train_data: TrainingData,
+    val_data: TrainingData,
     block_size: int,
     batch_size: int,
     eval_iters: int,
@@ -339,7 +423,7 @@ def estimate_loss(
         losses = torch.zeros(eval_iters)
 
         for index in range(eval_iters):
-            inputs, targets = get_batch(
+            inputs, targets = get_training_batch(
                 data,
                 block_size,
                 batch_size,
@@ -406,10 +490,32 @@ def train(
     weight_decay = float(
         train_config.get("weight_decay", 0.01)
     )
+    gradient_accumulation_steps = int(
+        train_config.get("gradient_accumulation_steps", 1)
+    )
+    configured_patience = train_config.get(
+        "early_stopping_patience"
+    )
+    early_stopping_patience = (
+        None
+        if configured_patience is None
+        else int(configured_patience)
+    )
 
     if log_interval < 1:
         raise ValueError(
             "log_interval must be positive"
+        )
+    if gradient_accumulation_steps < 1:
+        raise ValueError(
+            "gradient_accumulation_steps must be positive"
+        )
+    if (
+        early_stopping_patience is not None
+        and early_stopping_patience < 1
+    ):
+        raise ValueError(
+            "early_stopping_patience must be positive"
         )
 
     # Seeding BEFORE any random operation (batch sampling, weight
@@ -424,9 +530,43 @@ def train(
     seed_everything(train_config["seed"])
     device = resolve_device(train_config["device"])
 
-    training_text, validation_text = load_text_splits(
-        data_config
-    )
+    # data_config["type"] picks which of the two training-data shapes
+    # this run uses: "text" (the default — a flat corpus, split and
+    # tokenized below) or "character_jsonl" (pre-authored, response-masked
+    # character examples — see character_training.py). Character training
+    # always requires --warm-start or --resume rather than a config alone,
+    # because there is no meaningful way to build the atomic control-token
+    # vocabulary character training depends on except by extending an
+    # already-trained checkpoint's tokenizer (see tokenizer_for_warm_start).
+    data_type = data_config.get("type", "text")
+
+    if data_type not in {"text", "character_jsonl"}:
+        raise ValueError(
+            f"Unknown training data type: {data_type!r}"
+        )
+
+    character_data = data_type == "character_jsonl"
+    training_records = None
+    validation_records = None
+    character_manifest = None
+
+    if character_data:
+        if resume_path is None and warm_start_path is None:
+            raise ValueError(
+                "character training requires --warm-start or --resume"
+            )
+
+        (
+            training_records,
+            validation_records,
+            character_manifest,
+        ) = load_character_dataset_splits(data_config)
+        training_text = None
+        validation_text = None
+    else:
+        training_text, validation_text = load_text_splits(
+            data_config
+        )
 
     resume_checkpoint = None
     warm_start_checkpoint = None
@@ -450,14 +590,17 @@ def train(
             .get("extra", {})
             .get("tokenizer")
         )
-        tokenizer = (
-            tokenizer_from_dict(tokenizer_data)
-            if tokenizer_data is not None
-            else build_tokenizer(
+        if tokenizer_data is not None:
+            tokenizer = tokenizer_from_dict(tokenizer_data)
+        elif training_text is not None:
+            tokenizer = build_tokenizer(
                 training_text=training_text,
                 config=config.get("tokenizer"),
             )
-        )
+        else:
+            raise ValueError(
+                "character resume checkpoint has no tokenizer metadata"
+            )
     elif warm_start_path is not None:
         # A warm start's tokenizer must EXTEND (not replace) the source
         # checkpoint's vocabulary — see tokenizer_for_warm_start's
@@ -472,6 +615,7 @@ def train(
             config.get("tokenizer"),
         )
     else:
+        assert training_text is not None
         tokenizer = build_tokenizer(
             training_text=training_text,
             config=config.get("tokenizer"),
@@ -481,12 +625,23 @@ def train(
         "config": config,
         "tokenizer": tokenizer.to_dict(),
     }
-    corpus_manifest = load_corpus_manifest(data_config)
 
-    if corpus_manifest is not None:
-        checkpoint_metadata["corpus_manifest"] = (
-            corpus_manifest
-        )
+    # Whichever manifest applies (document corpus vs. character dataset)
+    # gets embedded the same way, for the same reason: a checkpoint should
+    # be able to answer "exactly what data was I trained on" without
+    # depending on those source files still existing on disk unchanged.
+    if character_data:
+        if character_manifest is not None:
+            checkpoint_metadata["character_dataset_manifest"] = (
+                character_manifest
+            )
+    else:
+        corpus_manifest = load_corpus_manifest(data_config)
+
+        if corpus_manifest is not None:
+            checkpoint_metadata["corpus_manifest"] = (
+                corpus_manifest
+            )
 
     if warm_start_checkpoint is not None:
         assert source_tokenizer is not None
@@ -507,14 +662,40 @@ def train(
             ),
         }
 
-    train_data = torch.tensor(
-        tokenizer.encode(training_text),
-        dtype=torch.long,
-    )
-    val_data = torch.tensor(
-        tokenizer.encode(validation_text),
-        dtype=torch.long,
-    )
+    if character_data:
+        if not isinstance(tokenizer, ByteBPETokenizer):
+            raise ValueError(
+                "character training requires a byte-BPE tokenizer"
+            )
+
+        assert training_records is not None
+        assert validation_records is not None
+        # Character examples are pre-encoded up front (fixed-width,
+        # response-masked — see encode_character_training_records) rather
+        # than tokenized lazily like the flat-text path below, since each
+        # example's response-cue position and padding depend on running
+        # the tokenizer once per record, not once per batch.
+        train_data = encode_character_training_records(
+            training_records,
+            tokenizer,
+            data_config["block_size"],
+        )
+        val_data = encode_character_training_records(
+            validation_records,
+            tokenizer,
+            data_config["block_size"],
+        )
+    else:
+        assert training_text is not None
+        assert validation_text is not None
+        train_data = torch.tensor(
+            tokenizer.encode(training_text),
+            dtype=torch.long,
+        )
+        val_data = torch.tensor(
+            tokenizer.encode(validation_text),
+            dtype=torch.long,
+        )
 
     model = build_model(
         config["model"],
@@ -587,6 +768,7 @@ def train(
     best_validation_loss = None
     best_step = None
     evaluation_completed_step = None
+    evaluations_without_improvement = 0
 
     if resume_path is not None:
         # restore_rng=True restores not just the model/optimizer weights
@@ -634,6 +816,13 @@ def train(
             evaluation_completed_step = int(
                 saved_evaluation_step
             )
+
+        evaluations_without_improvement = int(
+            checkpoint_extra.get(
+                "evaluations_without_improvement",
+                0,
+            )
+        )
 
         saved_config = (
             checkpoint
@@ -686,6 +875,10 @@ def train(
     if best_step is not None:
         checkpoint_metadata["best_step"] = best_step
 
+    checkpoint_metadata["evaluations_without_improvement"] = (
+        evaluations_without_improvement
+    )
+
     if warm_start_checkpoint is not None:
         print(f"warm starting from: {warm_start_path}")
         print(
@@ -702,32 +895,75 @@ def train(
     print(f"tokenizer: {tokenizer.to_dict()['type']}")
     print(f"vocabulary: {tokenizer.vocab_size}")
     print(
-        f"training tokens: {len(train_data):,}"
+        "gradient accumulation steps: "
+        f"{gradient_accumulation_steps}"
     )
-    print(
-        f"validation tokens: {len(val_data):,}"
-    )
-    print(
-        "training UTF-8 bytes: "
-        f"{len(training_text.encode('utf-8')):,}"
-    )
-    print(
-        "validation UTF-8 bytes: "
-        f"{len(validation_text.encode('utf-8')):,}"
-    )
-    # bytes/token reports the tokenizer's compression ratio directly in
-    # the training log — a quick sanity check that, e.g., a BPE run really
-    # is packing more information per token than a char-level run would
-    # (~1.0 bytes/token for ASCII text), without needing to run the
-    # separate scripts/inspect_bpe.py tool.
-    print(
-        "training bytes/token: "
-        f"{len(training_text.encode('utf-8')) / len(train_data):.3f}"
-    )
-    print(
-        "validation bytes/token: "
-        f"{len(validation_text.encode('utf-8')) / len(val_data):.3f}"
-    )
+
+    if early_stopping_patience is not None:
+        print(
+            "early stopping patience: "
+            f"{early_stopping_patience} evaluations"
+        )
+
+    if character_data:
+        # Character examples don't have a single "bytes/token" figure the
+        # way flat text does (each example's prompt is a different length,
+        # and most of it is masked out of the loss anyway) — instead this
+        # reports the response-only-loss-specific numbers: how many
+        # examples, how many total sequence tokens the model actually
+        # sees, and how many of those tokens are the SUPERVISED response
+        # positions that generate gradient (see character_training.py's
+        # RESPONSE_IGNORE_INDEX masking).
+        print("data type: character_jsonl")
+        print("loss objective: response_only")
+        print(f"training examples: {len(train_data):,}")
+        print(f"validation examples: {len(val_data):,}")
+        print(
+            "training sequence tokens: "
+            f"{sum(item.sequence_tokens for item in train_data):,}"
+        )
+        print(
+            "validation sequence tokens: "
+            f"{sum(item.sequence_tokens for item in val_data):,}"
+        )
+        print(
+            "training supervised response tokens: "
+            f"{sum(item.supervised_tokens for item in train_data):,}"
+        )
+        print(
+            "validation supervised response tokens: "
+            f"{sum(item.supervised_tokens for item in val_data):,}"
+        )
+    else:
+        assert training_text is not None
+        assert validation_text is not None
+        print(
+            f"training tokens: {len(train_data):,}"
+        )
+        print(
+            f"validation tokens: {len(val_data):,}"
+        )
+        print(
+            "training UTF-8 bytes: "
+            f"{len(training_text.encode('utf-8')):,}"
+        )
+        print(
+            "validation UTF-8 bytes: "
+            f"{len(validation_text.encode('utf-8')):,}"
+        )
+        # bytes/token reports the tokenizer's compression ratio directly
+        # in the training log — a quick sanity check that, e.g., a BPE run
+        # really is packing more information per token than a char-level
+        # run would (~1.0 bytes/token for ASCII text), without needing to
+        # run the separate scripts/inspect_bpe.py tool.
+        print(
+            "training bytes/token: "
+            f"{len(training_text.encode('utf-8')) / len(train_data):.3f}"
+        )
+        print(
+            "validation bytes/token: "
+            f"{len(validation_text.encode('utf-8')) / len(val_data):.3f}"
+        )
 
     block_size = data_config["block_size"]
     batch_size = data_config["batch_size"]
@@ -747,6 +983,8 @@ def train(
 
     last_loss = None
     last_gradient_norm = None
+    completed_steps = start_step
+    stopped_early = False
 
     for step in range(start_step, max_steps):
         learning_rate = learning_rate_for_step(
@@ -797,16 +1035,22 @@ def train(
                 f"lr {learning_rate:.6g}"
             )
 
-            if validation_loss_improved(
+            improved = validation_loss_improved(
                 losses["val"],
                 best_validation_loss,
-            ):
+            )
+
+            if improved:
                 best_validation_loss = losses["val"]
                 best_step = step
+                evaluations_without_improvement = 0
                 checkpoint_metadata[
                     "best_validation_loss"
                 ] = best_validation_loss
                 checkpoint_metadata["best_step"] = best_step
+                checkpoint_metadata[
+                    "evaluations_without_improvement"
+                ] = evaluations_without_improvement
 
                 save_best_validation_checkpoint(
                     path=best_path,
@@ -822,6 +1066,23 @@ def train(
                     f"val loss {best_validation_loss:.4f} "
                     f"at update {best_step}"
                 )
+            else:
+                evaluations_without_improvement += 1
+                checkpoint_metadata[
+                    "evaluations_without_improvement"
+                ] = evaluations_without_improvement
+
+            if early_stopping_reached(
+                evaluations_without_improvement,
+                early_stopping_patience,
+            ):
+                print(
+                    "early stopping: validation did not improve for "
+                    f"{evaluations_without_improvement} evaluations"
+                )
+                stopped_early = True
+                completed_steps = step
+                break
 
             # Exclude evaluation time from throughput.
             tokens_since_log = 0
@@ -830,25 +1091,81 @@ def train(
         if evaluation_already_completed:
             evaluation_completed_step = None
 
-        inputs, targets = get_batch(
-            train_data,
-            block_size,
-            batch_size,
-            device,
-        )
+        # The four-step heart of gradient descent: clear old gradients,
+        # compute new ones via backpropagation (possibly over several
+        # microbatches — see below), optionally clip them, then apply the
+        # update.
+        optimizer.zero_grad(set_to_none=True)
+        microbatches = []
+        total_supervised_tokens = None
+        accumulated_loss = None
+        tokens_this_update = 0
 
-        _, loss = model(inputs, targets)
-
-        if loss is None:
-            raise RuntimeError(
-                "Model did not return training loss"
+        # Gradient accumulation: rather than one big batch_size batch,
+        # take `gradient_accumulation_steps` smaller batches in a row and
+        # sum their gradients before taking a single optimizer step. This
+        # is how a large *effective* batch size is achieved without ever
+        # holding all of it in memory simultaneously — essential here,
+        # since the character fine-tuning config uses batch_size=1 at a
+        # 2,048-token context (one full-size batch of several such
+        # sequences wouldn't fit in MPS memory at once).
+        for _ in range(gradient_accumulation_steps):
+            inputs, targets = get_training_batch(
+                train_data,
+                block_size,
+                batch_size,
+                device,
             )
 
-        # The four-step heart of gradient descent: clear old gradients,
-        # compute new ones via backpropagation, optionally clip them, then
-        # apply the update.
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+            # Counts unmasked (non-RESPONSE_IGNORE_INDEX) target positions
+            # in this microbatch — used just below to weight each
+            # microbatch's contribution to the accumulated loss by how
+            # much it's actually supervising, rather than treating every
+            # microbatch as equally important regardless of response
+            # length.
+            supervised_tokens = (
+                targets != RESPONSE_IGNORE_INDEX
+            ).sum()
+
+            microbatches.append(
+                (inputs, targets, supervised_tokens)
+            )
+            total_supervised_tokens = (
+                supervised_tokens
+                if total_supervised_tokens is None
+                else total_supervised_tokens + supervised_tokens
+            )
+            tokens_this_update += inputs.numel()
+
+        assert total_supervised_tokens is not None
+
+        for inputs, targets, supervised_tokens in microbatches:
+            _, loss = model(inputs, targets)
+
+            if loss is None:
+                raise RuntimeError(
+                    "Model did not return training loss"
+                )
+
+            # Weight each microbatch by its share of this update's total
+            # unmasked targets, then backward() immediately (rather than
+            # summing raw losses first) so only one microbatch's
+            # activations are held in memory at a time. This is what
+            # makes gradient accumulation mathematically equivalent to
+            # one larger padded batch: a short response doesn't get the
+            # same total influence on the update as a much longer one
+            # merely because the two happened to be processed as separate
+            # forward passes.
+            scaled_loss = loss * (
+                supervised_tokens / total_supervised_tokens
+            )
+            scaled_loss.backward()
+            detached_loss = scaled_loss.detach()
+            accumulated_loss = (
+                detached_loss
+                if accumulated_loss is None
+                else accumulated_loss + detached_loss
+            )
 
         if gradient_clip > 0.0:
             # Gradient clipping rescales the ENTIRE gradient vector (across
@@ -875,9 +1192,10 @@ def train(
 
         optimizer.step()
 
-        last_loss = loss
+        assert accumulated_loss is not None
+        last_loss = accumulated_loss
         last_gradient_norm = gradient_norm
-        tokens_since_log += inputs.numel()
+        tokens_since_log += tokens_this_update
 
         peak_memory = max(
             peak_memory,
@@ -955,31 +1273,47 @@ def train(
         / "final.pt"
     )
 
-    if validation_loss_improved(
+    final_improved = validation_loss_improved(
         final_losses["val"],
         best_validation_loss,
-    ):
+    )
+
+    if final_improved:
         best_validation_loss = final_losses["val"]
-        best_step = max_steps
+        best_step = completed_steps
+        evaluations_without_improvement = 0
         checkpoint_metadata["best_validation_loss"] = (
             best_validation_loss
         )
         checkpoint_metadata["best_step"] = best_step
+        checkpoint_metadata[
+            "evaluations_without_improvement"
+        ] = evaluations_without_improvement
 
         save_best_validation_checkpoint(
             path=best_path,
             model=model,
             optimizer=optimizer,
-            step=max_steps,
+            step=completed_steps,
             checkpoint_metadata=checkpoint_metadata,
             validation_loss=best_validation_loss,
+        )
+    else:
+        evaluations_without_improvement += 1
+        checkpoint_metadata[
+            "evaluations_without_improvement"
+        ] = evaluations_without_improvement
+
+    if best_validation_loss is None or best_step is None:
+        raise RuntimeError(
+            "Training did not produce a finite validation loss"
         )
 
     save_checkpoint(
         final_path,
         model,
         optimizer,
-        max_steps,
+        completed_steps,
         extra=checkpoint_metadata,
     )
 
@@ -996,6 +1330,10 @@ def train(
         f"best: val loss {best_validation_loss:.4f} "
         f"at update {best_step}"
     )
+
+    if stopped_early:
+        print(f"stopped early at update {completed_steps}")
+
     print(f"best checkpoint: {best_path}")
     print(f"checkpoint: {final_path}")
 

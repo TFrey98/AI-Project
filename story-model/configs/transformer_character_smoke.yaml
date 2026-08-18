@@ -1,0 +1,50 @@
+tokenizer:
+  type: byte_bpe
+  vocab_size: 512
+  min_frequency: 2
+  special_tokens:
+    - "<|character|>"
+    - "<|relationship|>"
+    - "<|scene|>"
+    - "<|world_facts|>"
+    - "<|memories|>"
+    - "<|conversation|>"
+    - "<|user|>"
+    - "<|assistant|>"
+    - "<|end|>"
+
+model:
+  name: transformer
+  position_encoding: rope
+  normalization: layernorm
+  feed_forward_activation: swiglu
+  embedding_dim: 192
+  attention_heads: 6
+  layers: 6
+  feed_forward_dim: 768
+  dropout: 0.1
+
+data:
+  type: character_jsonl
+  train_path: data/character/smoke/train.jsonl
+  val_path: data/character/smoke/val.jsonl
+  manifest_path: data/character/smoke/manifest.json
+  block_size: 2048
+  batch_size: 1
+
+train:
+  seed: 1337
+  learning_rate: 1.0e-4
+  min_learning_rate: 1.0e-5
+  warmup_steps: 10
+  max_steps: 50
+  gradient_clip: 1.0
+  weight_decay: 0.01
+  log_interval: 10
+  eval_interval: 10
+  eval_iters: 6
+  device: auto
+
+checkpoint:
+  dir: checkpoints/transformer_character_smoke
+  save_interval: 50

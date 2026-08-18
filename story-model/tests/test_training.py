@@ -6,11 +6,30 @@ import torch
 from story_model.checkpoint import read_checkpoint
 from story_model.data import ByteBPETokenizer
 from story_model.train import (
+    early_stopping_reached,
     learning_rate_for_step,
     save_best_validation_checkpoint,
     tokenizer_for_warm_start,
     validation_loss_improved,
 )
+
+
+def test_early_stopping_is_disabled_without_patience():
+    assert not early_stopping_reached(100, None)
+
+
+def test_early_stopping_reaches_configured_patience():
+    assert not early_stopping_reached(2, 3)
+    assert early_stopping_reached(3, 3)
+    assert early_stopping_reached(4, 3)
+
+
+def test_early_stopping_rejects_invalid_counts():
+    with pytest.raises(ValueError, match="cannot be negative"):
+        early_stopping_reached(-1, 3)
+
+    with pytest.raises(ValueError, match="must be positive"):
+        early_stopping_reached(0, 0)
 
 
 def test_learning_rate_warmup():

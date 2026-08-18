@@ -59,6 +59,22 @@ def test_transformer_forward_shapes_and_loss():
     assert torch.isfinite(loss)
 
 
+def test_transformer_loss_ignores_masked_targets():
+    model = make_model()
+    tokens = torch.randint(0, 10, (2, 8))
+    targets = torch.full_like(tokens, -100)
+    targets[:, -1] = torch.tensor([3, 4])
+
+    logits, loss = model(tokens, targets)
+    expected = F.cross_entropy(
+        logits[:, -1, :],
+        targets[:, -1],
+    )
+
+    assert loss is not None
+    assert torch.allclose(loss, expected)
+
+
 def test_transformer_cannot_see_future_tokens():
     torch.manual_seed(7)
 
