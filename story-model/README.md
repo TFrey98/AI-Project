@@ -438,3 +438,55 @@ Category results expose failures hidden by one aggregate loss—for example,
 good voice imitation alongside poor memory use. They still measure target
 prediction rather than subjective believability; the next gate adds fixed
 generation scenarios and a human behavioral rubric before interactive use.
+
+## Phase 20 fixed generation review and local chat
+
+Phase 20 separates two questions that validation loss cannot answer:
+
+1. What does the model actually say when it must generate rather than score
+   an authored response?
+2. Does that answer remain believable across a live multi-turn exchange?
+
+Generate one deterministic candidate for every held-out validation record:
+
+```bash
+python scripts/generate_character_scenarios.py \
+  --checkpoint checkpoints/transformer_character_smoke/best.pt \
+  --data data/character/smoke/val.jsonl \
+  --output runs/phase20_smoke_review.jsonl \
+  --seed 1337 \
+  --temperature 0.8 \
+  --top-k 40
+```
+
+Each JSONL result contains the scenario and conversation IDs, behavior tags,
+seed, token counts, stop reason, latest user turn, authored reference response,
+and generated response. Score these results with
+`docs/character_review_rubric.md`. Keep prompt data and seeds fixed when
+comparing checkpoints so the comparison measures model changes rather than a
+different random sample.
+
+Test the same checkpoint interactively:
+
+```bash
+python scripts/chat_character.py \
+  --checkpoint checkpoints/transformer_character_smoke/best.pt \
+  --context examples/character_context.json \
+  --temperature 0.8 \
+  --top-k 40 \
+  --seed 1337
+```
+
+If the context file already ends with a user turn, the script answers that
+turn first. It then accepts new user messages until `/quit`. The chat session
+retains complete exchanges, increments the seed for each response, and relies
+on the existing prompt serializer to discard only complete oldest turns when
+the context budget is reached. Generation reserves space for the complete
+reply, stops at `<|end|>`, and also stops rather than emitting any unexpected
+control marker.
+
+The smoke checkpoint and Elara example test the conversation machinery only.
+They are not a provisional Vera implementation and should not be used to judge
+Vera's characterization. Vera still requires a reviewed character bible,
+fixed scenarios derived from that bible, and production conversation data
+that passes the Phase 19 gate before the full fine-tune.
