@@ -1,9 +1,11 @@
+import numpy as np
 import pytest
 
 from story_model.data import (
     ByteBPETokenizer,
     CharTokenizer,
     merge_token_pair,
+    merge_token_pair_array,
 )
 
 
@@ -119,6 +121,69 @@ def test_pair_merge_is_left_to_right_and_non_overlapping():
         pair=(1, 1),
         new_token=2,
     ) == [2, 1]
+
+
+@pytest.mark.parametrize(
+    ("tokens", "pair", "new_token"),
+    [
+        ([1, 1, 1], (1, 1), 2),
+        ([1, 1, 1, 1, 1], (1, 1), 2),
+        ([0, 1, 2, 1, 2, 3], (1, 2), 4),
+        ([1], (1, 1), 2),
+        ([], (1, 1), 2),
+    ],
+)
+def test_vectorized_pair_merge_matches_python(
+    tokens,
+    pair,
+    new_token,
+):
+    expected = merge_token_pair(tokens, pair, new_token)
+    actual = merge_token_pair_array(
+        np.asarray(tokens, dtype=np.uint16),
+        pair,
+        new_token,
+    )
+
+    assert actual.tolist() == expected
+
+
+def test_large_vectorized_bpe_encoding_matches_reference():
+    tokenizer = ByteBPETokenizer.train(
+        "the theatre and the throne, then café and storm ⚡. " * 20,
+        vocab_size=280,
+    )
+    text = "the other throne, café, storm ⚡, and the theatre. " * 2_500
+    reference = list(text.encode("utf-8"))
+
+    for rank, pair in enumerate(tokenizer.merges):
+        reference = merge_token_pair(
+            reference,
+            pair,
+            256 + rank,
+        )
+
+    assert len(text.encode("utf-8")) > 64 * 1024
+    assert tokenizer.encode(text) == reference
+
+
+def test_bpe_encoding_progress_does_not_change_tokens():
+    tokenizer = ByteBPETokenizer.train(
+        "abababab the theatre",
+        vocab_size=264,
+    )
+    progress = []
+    expected = tokenizer.encode("abab and the theatre")
+    actual = tokenizer.encode(
+        "abab and the theatre",
+        progress_callback=lambda completed, total, current: progress.append(
+            (completed, total, current)
+        ),
+    )
+
+    assert actual == expected
+    assert progress[-1][0] == len(tokenizer.merges)
+    assert progress[-1][1] == len(tokenizer.merges)
 
 
 def test_character_tokenizer_serialization_roundtrip():

@@ -19,11 +19,19 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Union
+from typing import Callable, Union
 
+import numpy as np
 import torch
 
 from story_model.corpus import sha256_text
+
+
+# NumPy has some fixed allocation overhead, so the original simple Python
+# loop remains quicker for short prompts.  Corpus-sized strings take the
+# vectorized path, where each merge pass runs in compiled code rather than
+# executing one Python loop iteration per token.
+BPE_VECTORIZATION_THRESHOLD = 64 * 1024
 
 
 @dataclass
@@ -143,6 +151,46 @@ def merge_token_pair(
             index += 1
 
     return merged
+
+
+def merge_token_pair_array(
+    tokens: np.ndarray,
+    pair: tuple[int, int],
+    new_token: int,
+) -> np.ndarray:
+    """NumPy equivalent of :func:`merge_token_pair`.
+
+    Results are bit-for-bit compatible with the original left-to-right,
+    non-overlapping Python implementation.  The only special case is a pair
+    whose two sides are equal: adjacent match positions overlap inside runs
+    such as ``aaa``, so only alternating starts in each run are retained.
+    """
+
+    if tokens.ndim != 1:
+        raise ValueError("tokens must be a one-dimensional array")
+
+    if len(tokens) < 2:
+        return tokens
+
+    matches = tokens[:-1] == pair[0]
+    matches &= tokens[1:] == pair[1]
+    starts = np.flatnonzero(matches)
+
+    if len(starts) == 0:
+        return tokens
+
+    if pair[0] == pair[1] and len(starts) > 1:
+        new_run = np.empty(len(starts), dtype=np.bool_)
+        new_run[0] = True
+        new_run[1:] = np.diff(starts) > 1
+        run_start_values = np.where(new_run, starts, 0)
+        run_starts = np.maximum.accumulate(run_start_values)
+        starts = starts[(starts - run_starts) % 2 == 0]
+
+    tokens[starts] = new_token
+    keep = np.ones(len(tokens), dtype=np.bool_)
+    keep[starts + 1] = False
+    return tokens[keep]
 
 
 @dataclass
@@ -426,7 +474,13 @@ class ByteBPETokenizer:
             special_tokens=tuple(combined),
         )
 
-    def _encode_bpe_segment(self, text: str) -> list[int]:
+    def _encode_bpe_segment(
+        self,
+        text: str,
+        progress_callback: Callable[[int, int, int], None] | None = None,
+        progress_offset: int = 0,
+        progress_total: int | None = None,
+    ) -> list[int]:
         # The original encode() logic, now applied only to the stretches
         # of text BETWEEN special tokens (see encode() below) rather than
         # unconditionally to the whole input. Encoding replays the SAME
@@ -435,7 +489,22 @@ class ByteBPETokenizer:
         # applying merges out of order (or a different subset) would
         # produce a different, incompatible tokenization than what the
         # model was trained on.
-        tokens = list(text.encode("utf-8"))
+        encoded_bytes = text.encode("utf-8")
+        total = (
+            len(self.merges)
+            if progress_total is None
+            else progress_total
+        )
+
+        if len(encoded_bytes) >= BPE_VECTORIZATION_THRESHOLD:
+            return self._encode_bpe_segment_vectorized(
+                encoded_bytes,
+                progress_callback=progress_callback,
+                progress_offset=progress_offset,
+                progress_total=total,
+            )
+
+        tokens = list(encoded_bytes)
 
         for rank, pair in enumerate(self.merges):
             tokens = merge_token_pair(
@@ -444,11 +513,71 @@ class ByteBPETokenizer:
                 256 + rank,
             )
 
+            if progress_callback is not None:
+                progress_callback(
+                    progress_offset + rank + 1,
+                    total,
+                    len(tokens),
+                )
+
         return tokens
 
-    def encode(self, text: str) -> list[int]:
+    def _encode_bpe_segment_vectorized(
+        self,
+        encoded_bytes: bytes,
+        progress_callback: Callable[[int, int, int], None] | None,
+        progress_offset: int,
+        progress_total: int,
+    ) -> list[int]:
+        """Replay learned merges with exact NumPy-vectorized passes."""
+
+        largest_token_id = self.base_vocab_size - 1
+
+        if largest_token_id <= np.iinfo(np.uint16).max:
+            dtype = np.uint16
+        elif largest_token_id <= np.iinfo(np.uint32).max:
+            dtype = np.uint32
+        else:
+            dtype = np.uint64
+
+        tokens = np.frombuffer(
+            encoded_bytes,
+            dtype=np.uint8,
+        ).astype(dtype)
+
+        for rank, pair in enumerate(self.merges):
+            tokens = merge_token_pair_array(
+                tokens,
+                pair,
+                256 + rank,
+            )
+
+            if progress_callback is not None:
+                progress_callback(
+                    progress_offset + rank + 1,
+                    progress_total,
+                    len(tokens),
+                )
+
+        return tokens.tolist()
+
+    def encode(
+        self,
+        text: str,
+        progress_callback: Callable[[int, int, int], None] | None = None,
+    ) -> list[int]:
+        """Encode text, optionally reporting completed BPE merge passes.
+
+        The callback receives ``(completed_passes, total_passes,
+        current_token_count)``.  It does not change tokenization; it only
+        exposes progress during large, otherwise silent corpus encodes.
+        """
+
         if not self.special_tokens:
-            return self._encode_bpe_segment(text)
+            return self._encode_bpe_segment(
+                text,
+                progress_callback=progress_callback,
+            )
 
         # Special tokens are matched as literal substrings BEFORE any BPE
         # segmentation runs, so "<|user|>" always becomes exactly one
@@ -472,6 +601,9 @@ class ByteBPETokenizer:
             )
         )
 
+        matches = list(pattern.finditer(text))
+        segment_count = len(matches) + 1
+        progress_total = len(self.merges) * segment_count
         tokens: list[int] = []
         position = 0
 
@@ -479,10 +611,15 @@ class ByteBPETokenizer:
         # token match gets ordinary BPE encoding; the match itself becomes
         # its single reserved token id; then continue past the match.
         # Whatever text remains after the last match is BPE-encoded too.
-        for match in pattern.finditer(text):
+        for segment_index, match in enumerate(matches):
             tokens.extend(
                 self._encode_bpe_segment(
-                    text[position : match.start()]
+                    text[position : match.start()],
+                    progress_callback=progress_callback,
+                    progress_offset=(
+                        segment_index * len(self.merges)
+                    ),
+                    progress_total=progress_total,
                 )
             )
             tokens.append(
@@ -491,7 +628,14 @@ class ByteBPETokenizer:
             position = match.end()
 
         tokens.extend(
-            self._encode_bpe_segment(text[position:])
+            self._encode_bpe_segment(
+                text[position:],
+                progress_callback=progress_callback,
+                progress_offset=(
+                    len(matches) * len(self.merges)
+                ),
+                progress_total=progress_total,
+            )
         )
         return tokens
 

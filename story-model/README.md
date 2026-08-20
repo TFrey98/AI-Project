@@ -27,6 +27,21 @@ python scripts/check_environment.py
 python -m story_model.train --config configs/bigram.yaml
 ```
 
+For long training/evaluation commands, use the external run monitor so console
+output, resource samples, Git identity, completion state, and hitch/stall
+warnings are preserved under `runs/`:
+
+```bash
+python scripts/run_with_monitor.py \
+  --name foundation-v2-train \
+  -- python -m story_model.train \
+  --config configs/transformer_foundation_v2.yaml \
+  --warm-start checkpoints/transformer_bpe_medium/best.pt
+```
+
+See `docs/run_monitoring.md` for monitored evaluation, progress/ETA output,
+run summaries, and interpretation of common performance patterns.
+
 ## Phase 12 document corpus
 
 Place at least two UTF-8 `.txt` documents under `data/raw/`. The

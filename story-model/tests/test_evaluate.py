@@ -3,8 +3,10 @@ import math
 import pytest
 import torch
 
+import story_model.evaluate as evaluate_module
 from story_model.evaluate import (
     calculate_bits_per_byte,
+    evaluate_checkpoint,
     evaluate_token_stream,
     read_evaluation_data_config,
 )
@@ -32,6 +34,25 @@ def test_evaluator_returns_finite_loss_for_every_target():
 
     assert math.isfinite(loss)
     assert token_count == len(data) - 1
+
+
+def test_evaluator_reports_final_progress():
+    model = BigramLanguageModel(vocabulary_size=5)
+    data = make_data()
+    progress = []
+
+    _, token_count = evaluate_token_stream(
+        model=model,
+        data=data,
+        block_size=4,
+        batch_size=2,
+        device="cpu",
+        progress_callback=lambda completed, total: progress.append(
+            (completed, total)
+        ),
+    )
+
+    assert progress[-1] == (token_count, token_count)
 
 
 def test_evaluator_is_deterministic():
@@ -146,3 +167,59 @@ def test_evaluation_data_config_rejects_non_mapping(tmp_path):
         match="must be a YAML mapping",
     ):
         read_evaluation_data_config(str(config_path))
+
+
+def test_checkpoint_evaluation_encodes_only_requested_split(monkeypatch):
+    encoded_texts = []
+
+    class RecordingTokenizer:
+        vocab_size = 5
+
+        def encode(self, text):
+            encoded_texts.append(text)
+            return [0, 1, 2, 3]
+
+        def token_byte_length(self, token_id):
+            return 1
+
+    source_model = BigramLanguageModel(vocabulary_size=5)
+    checkpoint = {
+        "step": 10,
+        "model_state_dict": source_model.state_dict(),
+    }
+    config = {
+        "model": {"name": "bigram"},
+        "data": {"block_size": 2, "batch_size": 1},
+        "train": {"device": "cpu"},
+    }
+    monkeypatch.setattr(
+        evaluate_module,
+        "read_checkpoint",
+        lambda *_args, **_kwargs: checkpoint,
+    )
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_generation_metadata",
+        lambda *_args, **_kwargs: (config, RecordingTokenizer()),
+    )
+    monkeypatch.setattr(
+        evaluate_module,
+        "load_text_splits",
+        lambda _config: ("TRAIN TEXT", "VAL TEXT"),
+    )
+    monkeypatch.setattr(
+        evaluate_module,
+        "build_model",
+        lambda *_args, **_kwargs: BigramLanguageModel(
+            vocabulary_size=5
+        ),
+    )
+
+    results = evaluate_checkpoint(
+        checkpoint_path="best.pt",
+        split="val",
+        device_name="cpu",
+    )
+
+    assert encoded_texts == ["VAL TEXT"]
+    assert set(results["splits"]) == {"val"}

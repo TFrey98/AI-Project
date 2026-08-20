@@ -46,6 +46,7 @@ from story_model.data import (
     tokenizer_from_dict,
 )
 from story_model.models import build_model
+from story_model.progress import ProgressReporter, format_duration
 from story_model.runtime import (
     current_memory_bytes,
     resolve_device,
@@ -66,6 +67,61 @@ TrainingData = Union[
     torch.Tensor,
     tuple[EncodedCharacterExample, ...],
 ]
+
+
+def encode_corpus_text(
+    tokenizer,
+    text: str,
+    split_name: str,
+    progress_interval: float = 10.0,
+) -> list[int]:
+    """Encode one corpus split with visible timing and BPE progress."""
+
+    utf8_bytes = len(text.encode("utf-8"))
+    print(
+        f"tokenization: encoding {split_name} "
+        f"({utf8_bytes:,} UTF-8 bytes)"
+    )
+    started_at = time.monotonic()
+    reporter: ProgressReporter | None = None
+
+    def report(
+        completed: int,
+        total: int,
+        current_tokens: int,
+    ) -> None:
+        nonlocal reporter
+
+        if total < 1:
+            return
+
+        if reporter is None:
+            reporter = ProgressReporter(
+                label=f"encode {split_name}",
+                total=total,
+                unit="merge passes",
+                interval_seconds=progress_interval,
+            )
+
+        reporter.update(
+            completed,
+            detail=f"current tokens {current_tokens:,}",
+        )
+
+    if isinstance(tokenizer, ByteBPETokenizer):
+        encoded = tokenizer.encode(
+            text,
+            progress_callback=report,
+        )
+    else:
+        encoded = tokenizer.encode(text)
+
+    elapsed = time.monotonic() - started_at
+    print(
+        f"tokenization: encoded {split_name}: "
+        f"{len(encoded):,} tokens in {format_duration(elapsed)}"
+    )
+    return encoded
 
 
 def learning_rate_for_step(
@@ -529,6 +585,7 @@ def train(
     # the comparison.
     seed_everything(train_config["seed"])
     device = resolve_device(train_config["device"])
+    print(f"startup: device {device}")
 
     # data_config["type"] picks which of the two training-data shapes
     # this run uses: "text" (the default — a flat corpus, split and
@@ -564,9 +621,11 @@ def train(
         training_text = None
         validation_text = None
     else:
+        print("startup: loading and verifying text corpus")
         training_text, validation_text = load_text_splits(
             data_config
         )
+        print("startup: text corpus verified")
 
     resume_checkpoint = None
     warm_start_checkpoint = None
@@ -581,6 +640,7 @@ def train(
         # DIFFERENT vocabulary that happens to have the same size but maps
         # ids to different tokens, which would corrupt every embedding the
         # model already learned.
+        print(f"startup: loading resume checkpoint {resume_path}")
         resume_checkpoint = read_checkpoint(
             resume_path,
             map_location="cpu",
@@ -606,6 +666,7 @@ def train(
         # checkpoint's vocabulary — see tokenizer_for_warm_start's
         # docstring for why reusing old token ids exactly is what makes
         # the weight-copying trick in load_model_warm_start correct.
+        print(f"startup: loading warm-start checkpoint {warm_start_path}")
         warm_start_checkpoint = read_checkpoint(
             warm_start_path,
             map_location="cpu",
@@ -616,6 +677,7 @@ def train(
         )
     else:
         assert training_text is not None
+        print("startup: building tokenizer from training text")
         tokenizer = build_tokenizer(
             training_text=training_text,
             config=config.get("tokenizer"),
@@ -688,14 +750,27 @@ def train(
     else:
         assert training_text is not None
         assert validation_text is not None
+        train_tokens = encode_corpus_text(
+            tokenizer,
+            training_text,
+            "train",
+        )
         train_data = torch.tensor(
-            tokenizer.encode(training_text),
+            train_tokens,
             dtype=torch.long,
+        )
+        del train_tokens
+        val_tokens = encode_corpus_text(
+            tokenizer,
+            validation_text,
+            "val",
         )
         val_data = torch.tensor(
-            tokenizer.encode(validation_text),
+            val_tokens,
             dtype=torch.long,
         )
+        del val_tokens
+        print("startup: token tensors ready")
 
     model = build_model(
         config["model"],
