@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Iterable
+from difflib import SequenceMatcher
+from typing import Callable, Iterable
 
 import torch
 
@@ -12,7 +13,114 @@ from story_model.character_training import (
     CharacterTrainingRecord,
     encode_character_training_records,
 )
+from story_model.character_chat import CharacterGeneration
 from story_model.data import ByteBPETokenizer
+
+
+def _matching_prefix_characters(first: str, second: str) -> int:
+    count = 0
+
+    for first_character, second_character in zip(first, second):
+        if first_character != second_character:
+            break
+
+        count += 1
+
+    return count
+
+
+def evaluate_character_generations(
+    records: Iterable[CharacterTrainingRecord],
+    generator: Callable[
+        [CharacterTrainingRecord, int], CharacterGeneration
+    ],
+) -> dict:
+    """Compare free-running responses with fixed authored responses.
+
+    This intentionally evaluates generation rather than teacher-forced
+    next-token loss. A response passes only when its visible text exactly
+    matches the authored target and the model independently emits the end
+    marker. That is a deliberately strict diagnostic for a training-set
+    overfit run; held-out behavioral review remains human-scored.
+    """
+
+    records = tuple(records)
+
+    if not records:
+        raise ValueError("character generation records cannot be empty")
+
+    results = []
+    exact_responses = 0
+    end_stops = 0
+    passed = 0
+    prefix_fraction_total = 0.0
+    similarity_total = 0.0
+
+    for index, record in enumerate(records):
+        generation = generator(record, index)
+
+        if not isinstance(generation, CharacterGeneration):
+            raise TypeError(
+                "character generator must return CharacterGeneration"
+            )
+
+        reference = record.context.target_response
+
+        if reference is None:
+            raise ValueError(
+                "generation evaluation records require target_response"
+            )
+
+        exact_response = generation.text == reference
+        end_stop = generation.stop_reason == "end"
+        scenario_passed = exact_response and end_stop
+        matching_prefix = _matching_prefix_characters(
+            generation.text,
+            reference,
+        )
+        prefix_fraction = matching_prefix / max(1, len(reference))
+        similarity = SequenceMatcher(
+            None,
+            generation.text,
+            reference,
+            autojunk=False,
+        ).ratio()
+        exact_responses += int(exact_response)
+        end_stops += int(end_stop)
+        passed += int(scenario_passed)
+        prefix_fraction_total += prefix_fraction
+        similarity_total += similarity
+        results.append(
+            {
+                "context_id": record.context.context_id,
+                "conversation_id": record.conversation_id,
+                "behavior_tags": record.behavior_tags,
+                "reference_response": reference,
+                "generated_response": generation.text,
+                "generated_tokens": len(generation.token_ids),
+                "prompt_tokens": generation.prompt_tokens,
+                "stop_reason": generation.stop_reason,
+                "matching_prefix_characters": matching_prefix,
+                "prefix_fraction": prefix_fraction,
+                "similarity": similarity,
+                "exact_response": exact_response,
+                "end_stop": end_stop,
+                "passed": scenario_passed,
+            }
+        )
+
+    return {
+        "examples": len(records),
+        "exact_responses": exact_responses,
+        "end_stops": end_stops,
+        "passed": passed,
+        "mean_prefix_fraction": (
+            prefix_fraction_total / len(records)
+        ),
+        "mean_similarity": similarity_total / len(records),
+        "all_passed": passed == len(records),
+        "results": tuple(results),
+    }
 
 
 @torch.no_grad()

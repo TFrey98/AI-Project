@@ -1,0 +1,45 @@
+tokenizer:
+  type: byte_bpe
+  vocab_size: 512
+  min_frequency: 2
+  # Explicitly empty: this makes --warm-start reject a bridge or character
+  # checkpoint whose tokenizer already contains control tokens.
+  special_tokens: []
+
+model:
+  name: transformer
+  position_encoding: rope
+  normalization: layernorm
+  feed_forward_activation: swiglu
+  embedding_dim: 192
+  attention_heads: 6
+  layers: 6
+  feed_forward_dim: 768
+  dropout: 0.1
+
+data:
+  train_path: data/processed_v2/train.txt
+  val_path: data/processed_v2/val.txt
+  manifest_path: data/processed_v2/manifest.json
+  # Keep the Phase 13 context and effective tokens/update unchanged so this
+  # run measures corpus quality rather than a second architecture change.
+  block_size: 256
+  batch_size: 16
+
+train:
+  seed: 1337
+  learning_rate: 1.0e-4
+  min_learning_rate: 1.0e-5
+  warmup_steps: 500
+  max_steps: 30000
+  gradient_clip: 1.0
+  weight_decay: 0.01
+  log_interval: 100
+  eval_interval: 1000
+  eval_iters: 200
+  early_stopping_patience: 6
+  device: auto
+
+checkpoint:
+  dir: checkpoints/transformer_foundation_v2
+  save_interval: 2000

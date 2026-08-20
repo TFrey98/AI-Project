@@ -769,6 +769,7 @@ def audit_character_training_records(
     min_conversations: int = 20,
     min_examples_per_tag: int = 5,
     required_tags: Iterable[str] = CHARACTER_BEHAVIOR_TAGS,
+    max_dropped_turns: int | None = None,
 ) -> dict:
     """Audit coverage and encoding quality before production training."""
 
@@ -794,6 +795,15 @@ def audit_character_training_records(
         if value < 1:
             raise ValueError(f"{label} must be positive")
 
+    if max_dropped_turns is not None:
+        if (
+            isinstance(max_dropped_turns, bool)
+            or not isinstance(max_dropped_turns, int)
+        ):
+            raise TypeError("max_dropped_turns must be an integer")
+        if max_dropped_turns < 0:
+            raise ValueError("max_dropped_turns cannot be negative")
+
     examples = encode_character_training_records(
         records,
         tokenizer,
@@ -817,6 +827,14 @@ def audit_character_training_records(
             "dataset has "
             f"{summary['conversations']} conversations; "
             f"requires {min_conversations}"
+        )
+    if (
+        max_dropped_turns is not None
+        and summary["dropped_turns"] > max_dropped_turns
+    ):
+        errors.append(
+            f"encoding drops {summary['dropped_turns']} old turns; "
+            f"maximum allowed is {max_dropped_turns}"
         )
 
     for tag in required_tags:

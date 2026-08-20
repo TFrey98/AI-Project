@@ -490,3 +490,195 @@ They are not a provisional Vera implementation and should not be used to judge
 Vera's characterization. Vera still requires a reviewed character bible,
 fixed scenarios derived from that bible, and production conversation data
 that passes the Phase 19 gate before the full fine-tune.
+
+## Phase 21 free-running generation gate
+
+Phase 20 exposed a gap that response-only loss did not: the smoke checkpoint
+could predict much of an authored response when the correct earlier response
+tokens were supplied during evaluation, but drifted into fragments when it had
+to consume its own predictions. It also failed to emit `<|end|>`. Phase 21
+therefore makes free-running reconstruction a required engineering gate.
+
+First rerun the original one-example overfit diagnostic. It now performs a
+greedy generation after reaching the loss threshold and requires both the
+exact target response and an end-marker stop:
+
+```bash
+python scripts/overfit_character_response.py \
+  --checkpoint checkpoints/transformer_bpe_medium/best.pt \
+  --context examples/character_context.json \
+  --block-size 2048
+```
+
+The final line must be:
+
+```text
+response-only free-running overfit: passed
+```
+
+Next train all four smoke training examples together as one deterministic full
+batch. This run is deliberately allowed to memorize them; its purpose is to
+prove that the model can associate multiple structured prompts with different
+responses and terminate every response without teacher forcing:
+
+```bash
+python scripts/overfit_character_generation.py \
+  --checkpoint checkpoints/transformer_bpe_medium/best.pt \
+  --data data/character/smoke/train.jsonl \
+  --output checkpoints/transformer_character_generation_overfit/final.pt \
+  --block-size 1024 \
+  --steps 500
+```
+
+The run uses dropout zero, no weight decay, and every training example on every
+update. Passing requires final teacher-forced loss below `0.05`, exact greedy
+reconstruction of all four responses, and four `<|end|>` stops. Its checkpoint
+is diagnostic and must not replace a validation-selected character checkpoint.
+
+The gate can be repeated independently against any character checkpoint and
+JSONL split:
+
+```bash
+python scripts/diagnose_character_generation.py \
+  --checkpoint checkpoints/transformer_character_generation_overfit/final.pt \
+  --data data/character/smoke/train.jsonl \
+  --max-new-tokens 80 \
+  --require-pass
+```
+
+For each scenario this reports exact-match status, end-marker status, matching
+prefix percentage, and stop reason. `--require-pass` gives the command a
+nonzero exit status unless every record passes. This exact-response standard is
+appropriate only for a memorization diagnostic. Production held-out responses
+can be phrased differently from their references and remain correct, so they
+continue to use the Phase 20 human behavioral rubric.
+
+Only after both Phase 21 diagnostics pass should the project build the larger
+generic dialogue bridge used to teach held-out prompt conditioning. Vera's
+authored production examples remain downstream of that bridge.
+
+## Phase 21B generic dialogue bridge
+
+Phase 21B supplies the missing middle ground between four-example memorization
+and Vera's authored data. It contains 120 deterministic examples arranged as
+24 five-turn conversations across four deliberately different diagnostic
+characters. Every conversation covers all ten behavior tags, so the
+conversation-level split cannot accidentally remove a category from either
+side. The held-out split contains new character, location, fact, memory, and
+relationship combinations while reusing their individual building blocks.
+
+Build the bridge dataset:
+
+```bash
+python scripts/build_character_bridge_dataset.py \
+  --output-dir data/character/bridge \
+  --seed 1337
+```
+
+The expected split is 95 training examples in 19 conversations and 25
+validation examples in five conversations. Audit both splits against the real
+foundation tokenizer. Zero dropped turns is mandatory because the fifth turn
+must recover the first user question:
+
+```bash
+python scripts/audit_character_dataset.py \
+  --checkpoint checkpoints/transformer_bpe_medium/best.pt \
+  --data data/character/bridge/train.jsonl \
+  --block-size 1024 \
+  --min-examples 95 \
+  --min-conversations 19 \
+  --min-tag-examples 19 \
+  --max-dropped-turns 0
+
+python scripts/audit_character_dataset.py \
+  --checkpoint checkpoints/transformer_bpe_medium/best.pt \
+  --data data/character/bridge/val.jsonl \
+  --block-size 1024 \
+  --min-examples 25 \
+  --min-conversations 5 \
+  --min-tag-examples 5 \
+  --max-dropped-turns 0
+```
+
+Warm-start the bridge from the Phase 13 foundationâ€”not from the memorized
+Phase 21 diagnostic checkpoint:
+
+```bash
+python -m story_model.train \
+  --config configs/transformer_character_bridge.yaml \
+  --warm-start checkpoints/transformer_bpe_medium/best.pt
+```
+
+The bridge uses a 1,024-token context as a progressive step between the
+foundation's original 256-token training and the eventual 2,048-token Vera
+context. It accumulates four microbatches per update and may stop before 2,000
+updates after six validation checks without improvement. Use `best.pt` for
+both evaluations:
+
+```bash
+python scripts/evaluate_character.py \
+  --checkpoint checkpoints/transformer_character_bridge/best.pt \
+  --data data/character/bridge/val.jsonl
+
+python scripts/diagnose_character_generation.py \
+  --checkpoint checkpoints/transformer_character_bridge/best.pt \
+  --data data/character/bridge/val.jsonl \
+  --max-new-tokens 160 \
+  --min-exact-fraction 0.20 \
+  --min-end-fraction 1.0 \
+  --min-mean-similarity 0.60 \
+  --require-pass
+```
+
+Exact reproduction is no longer required for every held-out prompt. The
+engineering floor instead requires at least five of 25 exact template
+responses, an end-marker stop for every response, and 60% mean character-level
+similarity to the references. These thresholds catch phrase-pool collapse
+without pretending to replace human judgment. Generate the review file with:
+
+```bash
+python scripts/generate_character_scenarios.py \
+  --checkpoint checkpoints/transformer_character_bridge/best.pt \
+  --data data/character/bridge/val.jsonl \
+  --output runs/phase21b_bridge_review.jsonl \
+  --seed 1337 \
+  --temperature 0.8 \
+  --top-k 40
+```
+
+Review it with `docs/character_review_rubric.md`. This bridge is scaffolding,
+not a character and not a substitute for Vera's bible. Its checkpoint becomes
+a candidate warm start for Vera only if the automatic gate passes and the
+held-out responses are coherent, correctly conditioned, and knowledge-scoped
+under human review.
+
+## Phase 22 expanded language foundation
+
+Phase 22 addresses the foundation corpus bottleneck before Vera-specific work
+continues. It requires a tracked provenance catalog, splits complete authors
+rather than only complete documents, caps the largest training author at 10%
+of bytes, and gates the corpus at 100 MB / 50 million BPE training tokens.
+
+The model, tokenizer merges, 512-token vocabulary, context length, and sampled
+tokens per update remain identical to Phase 13. This isolates the effect of
+corpus scale and diversity. The nine character-control tokens are explicitly
+absent, so a bridge/character checkpoint is rejected as a warm start.
+
+See `docs/foundation_corpus_v2.md` for source selection, rights/provenance,
+catalog schema, build commands, thresholds, training, and the controlled
+old-versus-new evaluation. The short command sequence is:
+
+```bash
+python scripts/build_foundation_corpus.py
+
+python scripts/audit_foundation_corpus.py \
+  --checkpoint checkpoints/transformer_bpe_medium/best.pt
+
+python -m story_model.train \
+  --config configs/transformer_foundation_v2_smoke.yaml \
+  --warm-start checkpoints/transformer_bpe_medium/best.pt
+
+python -m story_model.train \
+  --config configs/transformer_foundation_v2.yaml \
+  --warm-start checkpoints/transformer_bpe_medium/best.pt
+```

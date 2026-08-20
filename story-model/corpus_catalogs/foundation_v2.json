@@ -1,0 +1,2784 @@
+{
+  "catalog_version": 1,
+  "documents": [
+    {
+      "author": "Jane Austen",
+      "author_id": "austen_jane",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "austen_jane/pride_and_prejudice.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1342",
+      "source_url": "https://www.gutenberg.org/ebooks/1342",
+      "title": "Pride and Prejudice",
+      "year": 1813
+    },
+    {
+      "author": "Jane Austen",
+      "author_id": "austen_jane",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "austen_jane/sense_and_sensibility.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "161",
+      "source_url": "https://www.gutenberg.org/ebooks/161",
+      "title": "Sense and Sensibility",
+      "year": 1811
+    },
+    {
+      "author": "Jane Austen",
+      "author_id": "austen_jane",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "austen_jane/emma.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "158",
+      "source_url": "https://www.gutenberg.org/ebooks/158",
+      "title": "Emma",
+      "year": 1815
+    },
+    {
+      "author": "Jane Austen",
+      "author_id": "austen_jane",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "austen_jane/persuasion.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "105",
+      "source_url": "https://www.gutenberg.org/ebooks/105",
+      "title": "Persuasion",
+      "year": 1817
+    },
+    {
+      "author": "Jane Austen",
+      "author_id": "austen_jane",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "austen_jane/mansfield_park.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "141",
+      "source_url": "https://www.gutenberg.org/ebooks/141",
+      "title": "Mansfield Park",
+      "year": 1814
+    },
+    {
+      "author": "Charlotte Brontë",
+      "author_id": "bronte_charlotte",
+      "categories": [
+        "first_person",
+        "gothic",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "bronte_charlotte/jane_eyre_an_autobiography.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1260",
+      "source_url": "https://www.gutenberg.org/ebooks/1260",
+      "title": "Jane Eyre: An Autobiography",
+      "year": 1847
+    },
+    {
+      "author": "Emily Brontë",
+      "author_id": "bronte_emily",
+      "categories": [
+        "gothic",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "bronte_emily/wuthering_heights.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "768",
+      "source_url": "https://www.gutenberg.org/ebooks/768",
+      "title": "Wuthering Heights",
+      "year": 1847
+    },
+    {
+      "author": "Anne Brontë",
+      "author_id": "bronte_anne",
+      "categories": [
+        "first_person",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "bronte_anne/the_tenant_of_wildfell_hall.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "969",
+      "source_url": "https://www.gutenberg.org/ebooks/969",
+      "title": "The Tenant of Wildfell Hall",
+      "year": 1848
+    },
+    {
+      "author": "Anne Brontë",
+      "author_id": "bronte_anne",
+      "categories": [
+        "first_person",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "bronte_anne/agnes_grey.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "767",
+      "source_url": "https://www.gutenberg.org/ebooks/767",
+      "title": "Agnes Grey",
+      "year": 1847
+    },
+    {
+      "author": "George Eliot",
+      "author_id": "eliot_george",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "eliot_george/middlemarch.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "145",
+      "source_url": "https://www.gutenberg.org/ebooks/145",
+      "title": "Middlemarch",
+      "year": 1871
+    },
+    {
+      "author": "George Eliot",
+      "author_id": "eliot_george",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "eliot_george/silas_marner.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "550",
+      "source_url": "https://www.gutenberg.org/ebooks/550",
+      "title": "Silas Marner",
+      "year": 1861
+    },
+    {
+      "author": "George Eliot",
+      "author_id": "eliot_george",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "eliot_george/the_mill_on_the_floss.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "6688",
+      "source_url": "https://www.gutenberg.org/ebooks/6688",
+      "title": "The Mill on the Floss",
+      "year": 1860
+    },
+    {
+      "author": "Elizabeth Gaskell",
+      "author_id": "gaskell_elizabeth",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "gaskell_elizabeth/north_and_south.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "4276",
+      "source_url": "https://www.gutenberg.org/ebooks/4276",
+      "title": "North and South",
+      "year": 1855
+    },
+    {
+      "author": "Elizabeth Gaskell",
+      "author_id": "gaskell_elizabeth",
+      "categories": [
+        "dialogue",
+        "social"
+      ],
+      "language": "en",
+      "path": "gaskell_elizabeth/cranford.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "394",
+      "source_url": "https://www.gutenberg.org/ebooks/394",
+      "title": "Cranford",
+      "year": 1853
+    },
+    {
+      "author": "Elizabeth Gaskell",
+      "author_id": "gaskell_elizabeth",
+      "categories": [
+        "dialogue",
+        "social",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "gaskell_elizabeth/mary_barton.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2153",
+      "source_url": "https://www.gutenberg.org/ebooks/2153",
+      "title": "Mary Barton",
+      "year": 1848
+    },
+    {
+      "author": "Charles Dickens",
+      "author_id": "dickens_charles",
+      "categories": [
+        "dialogue",
+        "social",
+        "historical"
+      ],
+      "language": "en",
+      "path": "dickens_charles/great_expectations.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1400",
+      "source_url": "https://www.gutenberg.org/ebooks/1400",
+      "title": "Great Expectations",
+      "year": 1861
+    },
+    {
+      "author": "Charles Dickens",
+      "author_id": "dickens_charles",
+      "categories": [
+        "dialogue",
+        "historical",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "dickens_charles/a_tale_of_two_cities.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "98",
+      "source_url": "https://www.gutenberg.org/ebooks/98",
+      "title": "A Tale of Two Cities",
+      "year": 1859
+    },
+    {
+      "author": "Charles Dickens",
+      "author_id": "dickens_charles",
+      "categories": [
+        "dialogue",
+        "social",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "dickens_charles/oliver_twist.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "730",
+      "source_url": "https://www.gutenberg.org/ebooks/730",
+      "title": "Oliver Twist",
+      "year": 1838
+    },
+    {
+      "author": "Charles Dickens",
+      "author_id": "dickens_charles",
+      "categories": [
+        "dialogue",
+        "social",
+        "mystery"
+      ],
+      "language": "en",
+      "path": "dickens_charles/bleak_house.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1023",
+      "source_url": "https://www.gutenberg.org/ebooks/1023",
+      "title": "Bleak House",
+      "year": 1853
+    },
+    {
+      "author": "Charles Dickens",
+      "author_id": "dickens_charles",
+      "categories": [
+        "dialogue",
+        "social",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "dickens_charles/david_copperfield.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "766",
+      "source_url": "https://www.gutenberg.org/ebooks/766",
+      "title": "David Copperfield",
+      "year": 1850
+    },
+    {
+      "author": "Thomas Hardy",
+      "author_id": "hardy_thomas",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "hardy_thomas/tess_of_the_durbervilles_a_pure_woman.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "110",
+      "source_url": "https://www.gutenberg.org/ebooks/110",
+      "title": "Tess of the d'Urbervilles: A Pure Woman",
+      "year": 1891
+    },
+    {
+      "author": "Thomas Hardy",
+      "author_id": "hardy_thomas",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "hardy_thomas/far_from_the_madding_crowd.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "27",
+      "source_url": "https://www.gutenberg.org/ebooks/27",
+      "title": "Far from the Madding Crowd",
+      "year": 1874
+    },
+    {
+      "author": "Thomas Hardy",
+      "author_id": "hardy_thomas",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "hardy_thomas/the_return_of_the_native.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "122",
+      "source_url": "https://www.gutenberg.org/ebooks/122",
+      "title": "The Return of the Native",
+      "year": 1878
+    },
+    {
+      "author": "Thomas Hardy",
+      "author_id": "hardy_thomas",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "hardy_thomas/jude_the_obscure.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "153",
+      "source_url": "https://www.gutenberg.org/ebooks/153",
+      "title": "Jude the Obscure",
+      "year": 1895
+    },
+    {
+      "author": "Anthony Trollope",
+      "author_id": "trollope_anthony",
+      "categories": [
+        "dialogue",
+        "social"
+      ],
+      "language": "en",
+      "path": "trollope_anthony/the_warden.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "619",
+      "source_url": "https://www.gutenberg.org/ebooks/619",
+      "title": "The Warden",
+      "year": 1855
+    },
+    {
+      "author": "Anthony Trollope",
+      "author_id": "trollope_anthony",
+      "categories": [
+        "dialogue",
+        "social"
+      ],
+      "language": "en",
+      "path": "trollope_anthony/barchester_towers.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2432",
+      "source_url": "https://www.gutenberg.org/ebooks/2432",
+      "title": "Barchester Towers",
+      "year": 1857
+    },
+    {
+      "author": "Anthony Trollope",
+      "author_id": "trollope_anthony",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "trollope_anthony/framley_parsonage.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2860",
+      "source_url": "https://www.gutenberg.org/ebooks/2860",
+      "title": "Framley Parsonage",
+      "year": 1861
+    },
+    {
+      "author": "Wilkie Collins",
+      "author_id": "collins_wilkie",
+      "categories": [
+        "mystery",
+        "gothic",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "collins_wilkie/the_woman_in_white.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "583",
+      "source_url": "https://www.gutenberg.org/ebooks/583",
+      "title": "The Woman in White",
+      "year": 1859
+    },
+    {
+      "author": "Wilkie Collins",
+      "author_id": "collins_wilkie",
+      "categories": [
+        "mystery",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "collins_wilkie/the_moonstone.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "155",
+      "source_url": "https://www.gutenberg.org/ebooks/155",
+      "title": "The Moonstone",
+      "year": 1868
+    },
+    {
+      "author": "Arthur Conan Doyle",
+      "author_id": "doyle_arthur_conan",
+      "categories": [
+        "mystery",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "doyle_arthur_conan/the_adventures_of_sherlock_holmes.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1661",
+      "source_url": "https://www.gutenberg.org/ebooks/1661",
+      "title": "The Adventures of Sherlock Holmes",
+      "year": 1892
+    },
+    {
+      "author": "Arthur Conan Doyle",
+      "author_id": "doyle_arthur_conan",
+      "categories": [
+        "mystery",
+        "suspense",
+        "gothic"
+      ],
+      "language": "en",
+      "path": "doyle_arthur_conan/the_hound_of_the_baskervilles.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2852",
+      "source_url": "https://www.gutenberg.org/ebooks/2852",
+      "title": "The Hound of the Baskervilles",
+      "year": 1902
+    },
+    {
+      "author": "Arthur Conan Doyle",
+      "author_id": "doyle_arthur_conan",
+      "categories": [
+        "mystery",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "doyle_arthur_conan/the_memoirs_of_sherlock_holmes.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "834",
+      "source_url": "https://www.gutenberg.org/ebooks/834",
+      "title": "The Memoirs of Sherlock Holmes",
+      "year": 1894
+    },
+    {
+      "author": "Robert Louis Stevenson",
+      "author_id": "stevenson_robert_louis",
+      "categories": [
+        "adventure"
+      ],
+      "language": "en",
+      "path": "stevenson_robert_louis/treasure_island.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "120",
+      "source_url": "https://www.gutenberg.org/ebooks/120",
+      "title": "Treasure Island",
+      "year": 1883
+    },
+    {
+      "author": "Robert Louis Stevenson",
+      "author_id": "stevenson_robert_louis",
+      "categories": [
+        "gothic",
+        "mystery"
+      ],
+      "language": "en",
+      "path": "stevenson_robert_louis/the_strange_case_of_dr_jekyll_and_mr_hyde.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "42",
+      "source_url": "https://www.gutenberg.org/ebooks/42",
+      "title": "The strange case of Dr. Jekyll and Mr. Hyde",
+      "year": 1886
+    },
+    {
+      "author": "Robert Louis Stevenson",
+      "author_id": "stevenson_robert_louis",
+      "categories": [
+        "adventure",
+        "historical"
+      ],
+      "language": "en",
+      "path": "stevenson_robert_louis/kidnapped.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "421",
+      "source_url": "https://www.gutenberg.org/ebooks/421",
+      "title": "Kidnapped",
+      "year": 1886
+    },
+    {
+      "author": "H. G. Wells",
+      "author_id": "wells_h_g",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "wells_h_g/the_war_of_the_worlds.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "36",
+      "source_url": "https://www.gutenberg.org/ebooks/36",
+      "title": "The war of the worlds",
+      "year": 1898
+    },
+    {
+      "author": "H. G. Wells",
+      "author_id": "wells_h_g",
+      "categories": [
+        "speculative"
+      ],
+      "language": "en",
+      "path": "wells_h_g/the_time_machine.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "35",
+      "source_url": "https://www.gutenberg.org/ebooks/35",
+      "title": "The Time Machine",
+      "year": 1895
+    },
+    {
+      "author": "H. G. Wells",
+      "author_id": "wells_h_g",
+      "categories": [
+        "speculative",
+        "gothic"
+      ],
+      "language": "en",
+      "path": "wells_h_g/the_invisible_man_a_grotesque_romance.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "5230",
+      "source_url": "https://www.gutenberg.org/ebooks/5230",
+      "title": "The Invisible Man: A Grotesque Romance",
+      "year": 1897
+    },
+    {
+      "author": "H. G. Wells",
+      "author_id": "wells_h_g",
+      "categories": [
+        "speculative",
+        "gothic"
+      ],
+      "language": "en",
+      "path": "wells_h_g/the_island_of_doctor_moreau.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "159",
+      "source_url": "https://www.gutenberg.org/ebooks/159",
+      "title": "The island of Doctor Moreau",
+      "year": 1896
+    },
+    {
+      "author": "Bram Stoker",
+      "author_id": "stoker_bram",
+      "categories": [
+        "gothic",
+        "first_person",
+        "mystery"
+      ],
+      "language": "en",
+      "path": "stoker_bram/dracula.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "345",
+      "source_url": "https://www.gutenberg.org/ebooks/345",
+      "title": "Dracula",
+      "year": 1897
+    },
+    {
+      "author": "Sheridan Le Fanu",
+      "author_id": "le_fanu_sheridan",
+      "categories": [
+        "gothic",
+        "mystery",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "le_fanu_sheridan/carmilla.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "10007",
+      "source_url": "https://www.gutenberg.org/ebooks/10007",
+      "title": "Carmilla",
+      "year": 1872
+    },
+    {
+      "author": "Sheridan Le Fanu",
+      "author_id": "le_fanu_sheridan",
+      "categories": [
+        "gothic",
+        "mystery",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "le_fanu_sheridan/uncle_silas_a_tale_of_bartram_haugh.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "14851",
+      "source_url": "https://www.gutenberg.org/ebooks/14851",
+      "title": "Uncle Silas: A Tale of Bartram-Haugh",
+      "year": 1864
+    },
+    {
+      "author": "Mary Shelley",
+      "author_id": "shelley_mary",
+      "categories": [
+        "gothic",
+        "speculative",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "shelley_mary/frankenstein_or_the_modern_prometheus.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "84",
+      "source_url": "https://www.gutenberg.org/ebooks/84",
+      "title": "Frankenstein; or, the modern prometheus",
+      "year": 1818
+    },
+    {
+      "author": "Mark Twain",
+      "author_id": "twain_mark",
+      "categories": [
+        "adventure",
+        "dialogue",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "twain_mark/adventures_of_huckleberry_finn.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "76",
+      "source_url": "https://www.gutenberg.org/ebooks/76",
+      "title": "Adventures of Huckleberry Finn",
+      "year": 1884
+    },
+    {
+      "author": "Mark Twain",
+      "author_id": "twain_mark",
+      "categories": [
+        "adventure",
+        "dialogue",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "twain_mark/the_adventures_of_tom_sawyer_complete.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "74",
+      "source_url": "https://www.gutenberg.org/ebooks/74",
+      "title": "The Adventures of Tom Sawyer, Complete",
+      "year": 1876
+    },
+    {
+      "author": "Mark Twain",
+      "author_id": "twain_mark",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "twain_mark/a_connecticut_yankee_in_king_arthurs_court.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "86",
+      "source_url": "https://www.gutenberg.org/ebooks/86",
+      "title": "A Connecticut Yankee in King Arthur's Court",
+      "year": 1889
+    },
+    {
+      "author": "Louisa May Alcott",
+      "author_id": "alcott_louisa_may",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "alcott_louisa_may/little_women.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "514",
+      "source_url": "https://www.gutenberg.org/ebooks/514",
+      "title": "Little Women",
+      "year": 1868
+    },
+    {
+      "author": "Frances Hodgson Burnett",
+      "author_id": "burnett_frances_hodgson",
+      "categories": [
+        "relationship",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "burnett_frances_hodgson/the_secret_garden.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "113",
+      "source_url": "https://www.gutenberg.org/ebooks/113",
+      "title": "The Secret Garden",
+      "year": 1911
+    },
+    {
+      "author": "Frances Hodgson Burnett",
+      "author_id": "burnett_frances_hodgson",
+      "categories": [
+        "relationship",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "burnett_frances_hodgson/a_little_princess.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "146",
+      "source_url": "https://www.gutenberg.org/ebooks/146",
+      "title": "A Little Princess",
+      "year": 1905
+    },
+    {
+      "author": "L. M. Montgomery",
+      "author_id": "montgomery_l_m",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "montgomery_l_m/anne_of_green_gables.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "45",
+      "source_url": "https://www.gutenberg.org/ebooks/45",
+      "title": "Anne of Green Gables",
+      "year": 1908
+    },
+    {
+      "author": "Jack London",
+      "author_id": "london_jack",
+      "categories": [
+        "adventure",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "london_jack/the_call_of_the_wild.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "215",
+      "source_url": "https://www.gutenberg.org/ebooks/215",
+      "title": "The call of the wild",
+      "year": 1903
+    },
+    {
+      "author": "Jack London",
+      "author_id": "london_jack",
+      "categories": [
+        "adventure",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "london_jack/white_fang.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "910",
+      "source_url": "https://www.gutenberg.org/ebooks/910",
+      "title": "White Fang",
+      "year": 1906
+    },
+    {
+      "author": "Joseph Conrad",
+      "author_id": "conrad_joseph",
+      "categories": [
+        "adventure",
+        "first_person",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "conrad_joseph/heart_of_darkness.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "219",
+      "source_url": "https://www.gutenberg.org/ebooks/219",
+      "title": "Heart of Darkness",
+      "year": 1899
+    },
+    {
+      "author": "Joseph Conrad",
+      "author_id": "conrad_joseph",
+      "categories": [
+        "adventure",
+        "first_person",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "conrad_joseph/lord_jim.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "5658",
+      "source_url": "https://www.gutenberg.org/ebooks/5658",
+      "title": "Lord Jim",
+      "year": 1900
+    },
+    {
+      "author": "G. K. Chesterton",
+      "author_id": "chesterton_g_k",
+      "categories": [
+        "mystery",
+        "speculative"
+      ],
+      "language": "en",
+      "path": "chesterton_g_k/the_man_who_was_thursday_a_nightmare.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1695",
+      "source_url": "https://www.gutenberg.org/ebooks/1695",
+      "title": "The Man Who Was Thursday: A Nightmare",
+      "year": 1908
+    },
+    {
+      "author": "Baroness Orczy",
+      "author_id": "orczy_baroness",
+      "categories": [
+        "adventure",
+        "historical"
+      ],
+      "language": "en",
+      "path": "orczy_baroness/the_scarlet_pimpernel.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "60",
+      "source_url": "https://www.gutenberg.org/ebooks/60",
+      "title": "The Scarlet Pimpernel",
+      "year": 1905
+    },
+    {
+      "author": "Edith Wharton",
+      "author_id": "wharton_edith",
+      "categories": [
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "wharton_edith/the_age_of_innocence.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "541",
+      "source_url": "https://www.gutenberg.org/ebooks/541",
+      "title": "The Age of Innocence",
+      "year": 1920
+    },
+    {
+      "author": "Edith Wharton",
+      "author_id": "wharton_edith",
+      "categories": [
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "wharton_edith/ethan_frome.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "4517",
+      "source_url": "https://www.gutenberg.org/ebooks/4517",
+      "title": "Ethan Frome",
+      "year": 1911
+    },
+    {
+      "author": "Edith Wharton",
+      "author_id": "wharton_edith",
+      "categories": [
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "wharton_edith/the_house_of_mirth.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "284",
+      "source_url": "https://www.gutenberg.org/ebooks/284",
+      "title": "The House of Mirth",
+      "year": 1905
+    },
+    {
+      "author": "Henry James",
+      "author_id": "james_henry",
+      "categories": [
+        "gothic",
+        "first_person",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "james_henry/the_turn_of_the_screw.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "209",
+      "source_url": "https://www.gutenberg.org/ebooks/209",
+      "title": "The Turn of the Screw",
+      "year": 1898
+    },
+    {
+      "author": "Henry James",
+      "author_id": "james_henry",
+      "categories": [
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "james_henry/daisy_miller_a_study.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "208",
+      "source_url": "https://www.gutenberg.org/ebooks/208",
+      "title": "Daisy Miller: A Study",
+      "year": 1878
+    },
+    {
+      "author": "Oscar Wilde",
+      "author_id": "wilde_oscar",
+      "categories": [
+        "gothic",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "wilde_oscar/the_picture_of_dorian_gray.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "174",
+      "source_url": "https://www.gutenberg.org/ebooks/174",
+      "title": "The Picture of Dorian Gray",
+      "year": 1890
+    },
+    {
+      "author": "Oscar Wilde",
+      "author_id": "wilde_oscar",
+      "categories": [
+        "drama",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "wilde_oscar/the_importance_of_being_earnest_a_trivial_comedy_for_serious.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "844",
+      "source_url": "https://www.gutenberg.org/ebooks/844",
+      "title": "The Importance of Being Earnest: A Trivial Comedy for Serious People",
+      "year": 1895
+    },
+    {
+      "author": "Oscar Wilde",
+      "author_id": "wilde_oscar",
+      "categories": [
+        "drama",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "wilde_oscar/lady_windermeres_fan.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "790",
+      "source_url": "https://www.gutenberg.org/ebooks/790",
+      "title": "Lady Windermere's Fan",
+      "year": 1892
+    },
+    {
+      "author": "Oscar Wilde",
+      "author_id": "wilde_oscar",
+      "categories": [
+        "drama",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "wilde_oscar/an_ideal_husband.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "885",
+      "source_url": "https://www.gutenberg.org/ebooks/885",
+      "title": "An ideal husband",
+      "year": 1895
+    },
+    {
+      "author": "George Bernard Shaw",
+      "author_id": "shaw_george_bernard",
+      "categories": [
+        "drama",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "shaw_george_bernard/pygmalion.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "3825",
+      "source_url": "https://www.gutenberg.org/ebooks/3825",
+      "title": "Pygmalion",
+      "year": 1913
+    },
+    {
+      "author": "George Bernard Shaw",
+      "author_id": "shaw_george_bernard",
+      "categories": [
+        "drama",
+        "dialogue",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "shaw_george_bernard/mrs_warrens_profession.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1097",
+      "source_url": "https://www.gutenberg.org/ebooks/1097",
+      "title": "Mrs. Warren's Profession",
+      "year": 1893
+    },
+    {
+      "author": "George Bernard Shaw",
+      "author_id": "shaw_george_bernard",
+      "categories": [
+        "drama",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "shaw_george_bernard/man_and_superman_a_comedy_and_a_philosophy.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "3328",
+      "source_url": "https://www.gutenberg.org/ebooks/3328",
+      "title": "Man and Superman: A Comedy and a Philosophy",
+      "year": 1903
+    },
+    {
+      "author": "George Bernard Shaw",
+      "author_id": "shaw_george_bernard",
+      "categories": [
+        "drama",
+        "dialogue",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "shaw_george_bernard/candida.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "4023",
+      "source_url": "https://www.gutenberg.org/ebooks/4023",
+      "title": "Candida",
+      "year": 1898
+    },
+    {
+      "author": "Richard Brinsley Sheridan",
+      "author_id": "sheridan_richard_brinsley",
+      "categories": [
+        "drama",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "sheridan_richard_brinsley/the_school_for_scandal.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1929",
+      "source_url": "https://www.gutenberg.org/ebooks/1929",
+      "title": "The School for Scandal",
+      "year": 1777
+    },
+    {
+      "author": "Richard Brinsley Sheridan",
+      "author_id": "sheridan_richard_brinsley",
+      "categories": [
+        "drama",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "sheridan_richard_brinsley/the_rivals_a_comedy.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "24761",
+      "source_url": "https://www.gutenberg.org/ebooks/24761",
+      "title": "The Rivals: A Comedy",
+      "year": 1775
+    },
+    {
+      "author": "Anthony Hope",
+      "author_id": "hope_anthony",
+      "categories": [
+        "adventure",
+        "historical"
+      ],
+      "language": "en",
+      "path": "hope_anthony/the_prisoner_of_zenda.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "95",
+      "source_url": "https://www.gutenberg.org/ebooks/95",
+      "title": "The prisoner of Zenda",
+      "year": 1894
+    },
+    {
+      "author": "Nathaniel Hawthorne",
+      "author_id": "hawthorne_nathaniel",
+      "categories": [
+        "gothic",
+        "historical",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "hawthorne_nathaniel/the_scarlet_letter.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "33",
+      "source_url": "https://www.gutenberg.org/ebooks/33",
+      "title": "The Scarlet Letter",
+      "year": 1850
+    },
+    {
+      "author": "Nathaniel Hawthorne",
+      "author_id": "hawthorne_nathaniel",
+      "categories": [
+        "gothic",
+        "historical"
+      ],
+      "language": "en",
+      "path": "hawthorne_nathaniel/the_house_of_the_seven_gables.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "77",
+      "source_url": "https://www.gutenberg.org/ebooks/77",
+      "title": "The House of the Seven Gables",
+      "year": 1851
+    },
+    {
+      "author": "Herman Melville",
+      "author_id": "melville_herman",
+      "categories": [
+        "adventure",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "melville_herman/moby_dick_or_the_whale.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2489",
+      "source_url": "https://www.gutenberg.org/ebooks/2489",
+      "title": "Moby Dick; Or, The Whale",
+      "year": 1851
+    },
+    {
+      "author": "Washington Irving",
+      "author_id": "irving_washington",
+      "categories": [
+        "gothic",
+        "speculative",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "irving_washington/the_sketch_book_of_geoffrey_crayon.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2048",
+      "source_url": "https://www.gutenberg.org/ebooks/2048",
+      "title": "The Sketch-Book of Geoffrey Crayon",
+      "year": 1819
+    },
+    {
+      "author": "Charlotte Perkins Gilman",
+      "author_id": "gilman_charlotte_perkins",
+      "categories": [
+        "first_person",
+        "gothic"
+      ],
+      "language": "en",
+      "path": "gilman_charlotte_perkins/the_yellow_wallpaper.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1952",
+      "source_url": "https://www.gutenberg.org/ebooks/1952",
+      "title": "The Yellow Wallpaper",
+      "year": 1892
+    },
+    {
+      "author": "Charlotte Perkins Gilman",
+      "author_id": "gilman_charlotte_perkins",
+      "categories": [
+        "speculative",
+        "social"
+      ],
+      "language": "en",
+      "path": "gilman_charlotte_perkins/herland.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "32",
+      "source_url": "https://www.gutenberg.org/ebooks/32",
+      "title": "Herland",
+      "year": 1915
+    },
+    {
+      "author": "Kate Chopin",
+      "author_id": "chopin_kate",
+      "categories": [
+        "relationship",
+        "first_person",
+        "social"
+      ],
+      "language": "en",
+      "path": "chopin_kate/the_awakening_and_selected_short_stories.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "160",
+      "source_url": "https://www.gutenberg.org/ebooks/160",
+      "title": "The Awakening, and Selected Short Stories",
+      "year": 1899
+    },
+    {
+      "author": "E. M. Forster",
+      "author_id": "forster_e_m",
+      "categories": [
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "forster_e_m/a_room_with_a_view.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2641",
+      "source_url": "https://www.gutenberg.org/ebooks/2641",
+      "title": "A Room with a View",
+      "year": 1908
+    },
+    {
+      "author": "Rudyard Kipling",
+      "author_id": "kipling_rudyard",
+      "categories": [
+        "adventure",
+        "speculative"
+      ],
+      "language": "en",
+      "path": "kipling_rudyard/kim.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2226",
+      "source_url": "https://www.gutenberg.org/ebooks/2226",
+      "title": "Kim",
+      "year": 1901
+    },
+    {
+      "author": "Rudyard Kipling",
+      "author_id": "kipling_rudyard",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "kipling_rudyard/the_jungle_book.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "236",
+      "source_url": "https://www.gutenberg.org/ebooks/236",
+      "title": "The Jungle Book",
+      "year": 1894
+    },
+    {
+      "author": "Daniel Defoe",
+      "author_id": "defoe_daniel",
+      "categories": [
+        "adventure",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "defoe_daniel/the_life_and_adventures_of_robinson_crusoe.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "521",
+      "source_url": "https://www.gutenberg.org/ebooks/521",
+      "title": "The Life and Adventures of Robinson Crusoe",
+      "year": 1719
+    },
+    {
+      "author": "Jonathan Swift",
+      "author_id": "swift_jonathan",
+      "categories": [
+        "speculative",
+        "first_person",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "swift_jonathan/gullivers_travels_into_several_remote_nations_of_the_world.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "829",
+      "source_url": "https://www.gutenberg.org/ebooks/829",
+      "title": "Gulliver's Travels into Several Remote Nations of the World",
+      "year": 1726
+    },
+    {
+      "author": "E. Nesbit",
+      "author_id": "nesbit_e",
+      "categories": [
+        "speculative",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "nesbit_e/five_children_and_it.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "778",
+      "source_url": "https://www.gutenberg.org/ebooks/778",
+      "title": "Five Children and It",
+      "year": 1902
+    },
+    {
+      "author": "Lewis Carroll",
+      "author_id": "carroll_lewis",
+      "categories": [
+        "speculative",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "carroll_lewis/alices_adventures_in_wonderland.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "11",
+      "source_url": "https://www.gutenberg.org/ebooks/11",
+      "title": "Alice's Adventures in Wonderland",
+      "year": 1865
+    },
+    {
+      "author": "Lewis Carroll",
+      "author_id": "carroll_lewis",
+      "categories": [
+        "speculative",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "carroll_lewis/through_the_looking_glass.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "12",
+      "source_url": "https://www.gutenberg.org/ebooks/12",
+      "title": "Through the Looking-Glass",
+      "year": 1871
+    },
+    {
+      "author": "William Makepeace Thackeray",
+      "author_id": "thackeray_william_makepeace",
+      "categories": [
+        "dialogue",
+        "social",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "thackeray_william_makepeace/vanity_fair.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "599",
+      "source_url": "https://www.gutenberg.org/ebooks/599",
+      "title": "Vanity Fair",
+      "year": 1848
+    },
+    {
+      "author": "George Meredith",
+      "author_id": "meredith_george",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "meredith_george/the_egoist_a_comedy_in_narrative.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1684",
+      "source_url": "https://www.gutenberg.org/ebooks/1684",
+      "title": "The Egoist: A Comedy in Narrative",
+      "year": 1879
+    },
+    {
+      "author": "H. Rider Haggard",
+      "author_id": "haggard_h_rider",
+      "categories": [
+        "adventure",
+        "speculative"
+      ],
+      "language": "en",
+      "path": "haggard_h_rider/king_solomons_mines.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2166",
+      "source_url": "https://www.gutenberg.org/ebooks/2166",
+      "title": "King Solomon's Mines",
+      "year": 1885
+    },
+    {
+      "author": "H. Rider Haggard",
+      "author_id": "haggard_h_rider",
+      "categories": [
+        "adventure",
+        "speculative",
+        "gothic"
+      ],
+      "language": "en",
+      "path": "haggard_h_rider/finished.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1724",
+      "source_url": "https://www.gutenberg.org/ebooks/1724",
+      "title": "Finished",
+      "year": 1887
+    },
+    {
+      "author": "J. M. Barrie",
+      "author_id": "barrie_j_m",
+      "categories": [
+        "speculative",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "barrie_j_m/peter_pan.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "16",
+      "source_url": "https://www.gutenberg.org/ebooks/16",
+      "title": "Peter Pan",
+      "year": 1911
+    },
+    {
+      "author": "Kenneth Grahame",
+      "author_id": "grahame_kenneth",
+      "categories": [
+        "speculative",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "grahame_kenneth/the_wind_in_the_willows.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "289",
+      "source_url": "https://www.gutenberg.org/ebooks/289",
+      "title": "The Wind in the Willows",
+      "year": 1908
+    },
+    {
+      "author": "Anthony Trollope",
+      "author_id": "trollope_anthony",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "trollope_anthony/can_you_forgive_her.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "19500",
+      "source_url": "https://www.gutenberg.org/ebooks/19500",
+      "title": "Can You Forgive Her?",
+      "year": 1865
+    },
+    {
+      "author": "Anthony Trollope",
+      "author_id": "trollope_anthony",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "trollope_anthony/the_small_house_at_allington.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "4599",
+      "source_url": "https://www.gutenberg.org/ebooks/4599",
+      "title": "The Small House at Allington",
+      "year": 1864
+    },
+    {
+      "author": "Elizabeth Gaskell",
+      "author_id": "gaskell_elizabeth",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "gaskell_elizabeth/wives_and_daughters.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "4274",
+      "source_url": "https://www.gutenberg.org/ebooks/4274",
+      "title": "Wives and Daughters",
+      "year": 1866
+    },
+    {
+      "author": "Thomas Hardy",
+      "author_id": "hardy_thomas",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "hardy_thomas/the_mayor_of_casterbridge.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "143",
+      "source_url": "https://www.gutenberg.org/ebooks/143",
+      "title": "The Mayor of Casterbridge",
+      "year": 1886
+    },
+    {
+      "author": "Wilkie Collins",
+      "author_id": "collins_wilkie",
+      "categories": [
+        "mystery",
+        "suspense",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "collins_wilkie/no_name.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1438",
+      "source_url": "https://www.gutenberg.org/ebooks/1438",
+      "title": "No Name",
+      "year": 1862
+    },
+    {
+      "author": "Wilkie Collins",
+      "author_id": "collins_wilkie",
+      "categories": [
+        "mystery",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "collins_wilkie/armadale.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1895",
+      "source_url": "https://www.gutenberg.org/ebooks/1895",
+      "title": "Armadale",
+      "year": 1866
+    },
+    {
+      "author": "Arthur Conan Doyle",
+      "author_id": "doyle_arthur_conan",
+      "categories": [
+        "mystery",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "doyle_arthur_conan/the_sign_of_the_four.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2097",
+      "source_url": "https://www.gutenberg.org/ebooks/2097",
+      "title": "The Sign of the Four",
+      "year": 1890
+    },
+    {
+      "author": "Arthur Conan Doyle",
+      "author_id": "doyle_arthur_conan",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "doyle_arthur_conan/the_lost_world.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "139",
+      "source_url": "https://www.gutenberg.org/ebooks/139",
+      "title": "The Lost World",
+      "year": 1912
+    },
+    {
+      "author": "H. G. Wells",
+      "author_id": "wells_h_g",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "wells_h_g/the_first_men_in_the_moon.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1013",
+      "source_url": "https://www.gutenberg.org/ebooks/1013",
+      "title": "The First Men in the Moon",
+      "year": 1901
+    },
+    {
+      "author": "Edith Wharton",
+      "author_id": "wharton_edith",
+      "categories": [
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "wharton_edith/the_custom_of_the_country.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "11052",
+      "source_url": "https://www.gutenberg.org/ebooks/11052",
+      "title": "The Custom of the Country",
+      "year": 1913
+    },
+    {
+      "author": "Joseph Conrad",
+      "author_id": "conrad_joseph",
+      "categories": [
+        "adventure",
+        "conflict",
+        "historical"
+      ],
+      "language": "en",
+      "path": "conrad_joseph/nostromo_a_tale_of_the_seaboard.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2021",
+      "source_url": "https://www.gutenberg.org/ebooks/2021",
+      "title": "Nostromo: A Tale of the Seaboard",
+      "year": 1904
+    },
+    {
+      "author": "Jack London",
+      "author_id": "london_jack",
+      "categories": [
+        "adventure",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "london_jack/the_sea_wolf.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1074",
+      "source_url": "https://www.gutenberg.org/ebooks/1074",
+      "title": "The Sea-Wolf",
+      "year": 1904
+    },
+    {
+      "author": "Rudyard Kipling",
+      "author_id": "kipling_rudyard",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "kipling_rudyard/the_second_jungle_book.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1937",
+      "source_url": "https://www.gutenberg.org/ebooks/1937",
+      "title": "The Second Jungle Book",
+      "year": 1895
+    },
+    {
+      "author": "H. Rider Haggard",
+      "author_id": "haggard_h_rider",
+      "categories": [
+        "adventure",
+        "speculative"
+      ],
+      "language": "en",
+      "path": "haggard_h_rider/allan_quatermain.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "711",
+      "source_url": "https://www.gutenberg.org/ebooks/711",
+      "title": "Allan Quatermain",
+      "year": 1887
+    },
+    {
+      "author": "Robert Louis Stevenson",
+      "author_id": "stevenson_robert_louis",
+      "categories": [
+        "adventure",
+        "historical",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "stevenson_robert_louis/the_master_of_ballantrae_a_winters_tale.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "864",
+      "source_url": "https://www.gutenberg.org/ebooks/864",
+      "title": "The Master of Ballantrae: A Winter's Tale",
+      "year": 1889
+    },
+    {
+      "author": "Mark Twain",
+      "author_id": "twain_mark",
+      "categories": [
+        "first_person",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "twain_mark/life_on_the_mississippi.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "245",
+      "source_url": "https://www.gutenberg.org/ebooks/245",
+      "title": "Life on the Mississippi",
+      "year": 1883
+    },
+    {
+      "author": "George MacDonald",
+      "author_id": "macdonald_george",
+      "categories": [
+        "speculative",
+        "gothic",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "macdonald_george/phantastes_a_faerie_romance_for_men_and_women.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "325",
+      "source_url": "https://www.gutenberg.org/ebooks/325",
+      "title": "Phantastes: A Faerie Romance for Men and Women",
+      "year": 1858
+    },
+    {
+      "author": "George MacDonald",
+      "author_id": "macdonald_george",
+      "categories": [
+        "speculative",
+        "gothic",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "macdonald_george/lilith_a_romance.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1640",
+      "source_url": "https://www.gutenberg.org/ebooks/1640",
+      "title": "Lilith: A Romance",
+      "year": 1895
+    },
+    {
+      "author": "George MacDonald",
+      "author_id": "macdonald_george",
+      "categories": [
+        "speculative",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "macdonald_george/the_princess_and_the_goblin.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "708",
+      "source_url": "https://www.gutenberg.org/ebooks/708",
+      "title": "The Princess and the Goblin",
+      "year": 1872
+    },
+    {
+      "author": "William Morris",
+      "author_id": "morris_william",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "morris_william/the_well_at_the_worlds_end_a_tale.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "169",
+      "source_url": "https://www.gutenberg.org/ebooks/169",
+      "title": "The Well at the World's End: A Tale",
+      "year": 1896
+    },
+    {
+      "author": "William Morris",
+      "author_id": "morris_william",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "morris_william/the_wood_beyond_the_world.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "3055",
+      "source_url": "https://www.gutenberg.org/ebooks/3055",
+      "title": "The Wood Beyond the World",
+      "year": 1894
+    },
+    {
+      "author": "Lord Dunsany",
+      "author_id": "dunsany_lord",
+      "categories": [
+        "speculative",
+        "folkloric"
+      ],
+      "language": "en",
+      "path": "dunsany_lord/the_king_of_elflands_daughter.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "61077",
+      "source_url": "https://www.gutenberg.org/ebooks/61077",
+      "title": "The King of Elfland's Daughter",
+      "year": 1924
+    },
+    {
+      "author": "Lord Dunsany",
+      "author_id": "dunsany_lord",
+      "categories": [
+        "speculative",
+        "folkloric"
+      ],
+      "language": "en",
+      "path": "dunsany_lord/the_book_of_wonder.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "7477",
+      "source_url": "https://www.gutenberg.org/ebooks/7477",
+      "title": "The Book of Wonder",
+      "year": 1912
+    },
+    {
+      "author": "E. R. Eddison",
+      "author_id": "eddison_e_r",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "eddison_e_r/the_worm_ouroboros_a_romance.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "67090",
+      "source_url": "https://www.gutenberg.org/ebooks/67090",
+      "title": "The Worm Ouroboros: A Romance",
+      "year": 1922
+    },
+    {
+      "author": "David Lindsay",
+      "author_id": "lindsay_david",
+      "categories": [
+        "speculative",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "lindsay_david/a_voyage_to_arcturus.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1329",
+      "source_url": "https://www.gutenberg.org/ebooks/1329",
+      "title": "A Voyage to Arcturus",
+      "year": 1920
+    },
+    {
+      "author": "Sir Walter Scott",
+      "author_id": "scott_walter",
+      "categories": [
+        "historical",
+        "adventure",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "scott_walter/ivanhoe_a_romance.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "82",
+      "source_url": "https://www.gutenberg.org/ebooks/82",
+      "title": "Ivanhoe: A Romance",
+      "year": 1819
+    },
+    {
+      "author": "James Fenimore Cooper",
+      "author_id": "cooper_james_fenimore",
+      "categories": [
+        "historical",
+        "adventure",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "cooper_james_fenimore/the_last_of_the_mohicans_a_narrative_of_1757.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "940",
+      "source_url": "https://www.gutenberg.org/ebooks/940",
+      "title": "The Last of the Mohicans; A narrative of 1757",
+      "year": 1826
+    },
+    {
+      "author": "Ann Radcliffe",
+      "author_id": "radcliffe_ann",
+      "categories": [
+        "gothic",
+        "mystery",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "radcliffe_ann/the_mysteries_of_udolpho.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "3268",
+      "source_url": "https://www.gutenberg.org/ebooks/3268",
+      "title": "The Mysteries of Udolpho",
+      "year": 1794
+    },
+    {
+      "author": "Willa Cather",
+      "author_id": "cather_willa",
+      "categories": [
+        "first_person",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "cather_willa/my_ntonia.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "242",
+      "source_url": "https://www.gutenberg.org/ebooks/242",
+      "title": "My Ántonia",
+      "year": 1918
+    },
+    {
+      "author": "Willa Cather",
+      "author_id": "cather_willa",
+      "categories": [
+        "first_person",
+        "social"
+      ],
+      "language": "en",
+      "path": "cather_willa/o_pioneers.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "24",
+      "source_url": "https://www.gutenberg.org/ebooks/24",
+      "title": "O Pioneers!",
+      "year": 1913
+    },
+    {
+      "author": "Theodore Dreiser",
+      "author_id": "dreiser_theodore",
+      "categories": [
+        "social",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "dreiser_theodore/sister_carrie_a_novel.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "233",
+      "source_url": "https://www.gutenberg.org/ebooks/233",
+      "title": "Sister Carrie: A Novel",
+      "year": 1900
+    },
+    {
+      "author": "Stephen Crane",
+      "author_id": "crane_stephen",
+      "categories": [
+        "adventure",
+        "conflict",
+        "historical"
+      ],
+      "language": "en",
+      "path": "crane_stephen/the_red_badge_of_courage_an_episode_of_the_american_civil_wa.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "73",
+      "source_url": "https://www.gutenberg.org/ebooks/73",
+      "title": "The Red Badge of Courage: An Episode of the American Civil War",
+      "year": 1895
+    },
+    {
+      "author": "Booth Tarkington",
+      "author_id": "tarkington_booth",
+      "categories": [
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "tarkington_booth/the_magnificent_ambersons.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "8867",
+      "source_url": "https://www.gutenberg.org/ebooks/8867",
+      "title": "The Magnificent Ambersons",
+      "year": 1918
+    },
+    {
+      "author": "William Dean Howells",
+      "author_id": "howells_william_dean",
+      "categories": [
+        "social",
+        "relationship",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "howells_william_dean/the_rise_of_silas_lapham.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "154",
+      "source_url": "https://www.gutenberg.org/ebooks/154",
+      "title": "The Rise of Silas Lapham",
+      "year": 1885
+    },
+    {
+      "author": "Frank Norris",
+      "author_id": "norris_frank",
+      "categories": [
+        "social",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "norris_frank/mcteague_a_story_of_san_francisco.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "165",
+      "source_url": "https://www.gutenberg.org/ebooks/165",
+      "title": "McTeague: A Story of San Francisco",
+      "year": 1899
+    },
+    {
+      "author": "Anna Katharine Green",
+      "author_id": "green_anna_katharine",
+      "categories": [
+        "mystery",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "green_anna_katharine/the_leavenworth_case.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "4047",
+      "source_url": "https://www.gutenberg.org/ebooks/4047",
+      "title": "The Leavenworth Case",
+      "year": 1878
+    },
+    {
+      "author": "Ambrose Bierce",
+      "author_id": "bierce_ambrose",
+      "categories": [
+        "gothic",
+        "conflict",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "bierce_ambrose/the_collected_works_of_ambrose_bierce_volume_02.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "13334",
+      "source_url": "https://www.gutenberg.org/ebooks/13334",
+      "title": "The Collected Works of Ambrose Bierce, Volume 02",
+      "year": 1892
+    },
+    {
+      "author": "Sir Walter Scott",
+      "author_id": "scott_walter",
+      "categories": [
+        "historical",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "scott_walter/rob_roy_complete.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "7025",
+      "source_url": "https://www.gutenberg.org/ebooks/7025",
+      "title": "Rob Roy — Complete",
+      "year": 1817
+    },
+    {
+      "author": "Sir Walter Scott",
+      "author_id": "scott_walter",
+      "categories": [
+        "historical",
+        "adventure",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "scott_walter/waverley_or_tis_sixty_years_since.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2034",
+      "source_url": "https://www.gutenberg.org/ebooks/2034",
+      "title": "Waverley; or, 'Tis sixty years since",
+      "year": 1814
+    },
+    {
+      "author": "Anthony Trollope",
+      "author_id": "trollope_anthony",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "trollope_anthony/the_last_chronicle_of_barset.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "3045",
+      "source_url": "https://www.gutenberg.org/ebooks/3045",
+      "title": "The Last Chronicle of Barset",
+      "year": 1867
+    },
+    {
+      "author": "George Eliot",
+      "author_id": "eliot_george",
+      "categories": [
+        "dialogue",
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "eliot_george/daniel_deronda.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "7469",
+      "source_url": "https://www.gutenberg.org/ebooks/7469",
+      "title": "Daniel Deronda",
+      "year": 1876
+    },
+    {
+      "author": "Thomas Hardy",
+      "author_id": "hardy_thomas",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "hardy_thomas/the_woodlanders.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "482",
+      "source_url": "https://www.gutenberg.org/ebooks/482",
+      "title": "The Woodlanders",
+      "year": 1887
+    },
+    {
+      "author": "Elizabeth Gaskell",
+      "author_id": "gaskell_elizabeth",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "gaskell_elizabeth/sylvias_lovers_complete.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "4537",
+      "source_url": "https://www.gutenberg.org/ebooks/4537",
+      "title": "Sylvia's Lovers — Complete",
+      "year": 1863
+    },
+    {
+      "author": "Charles Dickens",
+      "author_id": "dickens_charles",
+      "categories": [
+        "dialogue",
+        "social",
+        "historical"
+      ],
+      "language": "en",
+      "path": "dickens_charles/nicholas_nickleby.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "967",
+      "source_url": "https://www.gutenberg.org/ebooks/967",
+      "title": "Nicholas Nickleby",
+      "year": 1839
+    },
+    {
+      "author": "William Makepeace Thackeray",
+      "author_id": "thackeray_william_makepeace",
+      "categories": [
+        "historical",
+        "social",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "thackeray_william_makepeace/the_history_of_henry_esmond_esq_a_colonel_in_the_service_of_.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2511",
+      "source_url": "https://www.gutenberg.org/ebooks/2511",
+      "title": "The History of Henry Esmond, Esq., a Colonel in the Service of Her Majesty Queen Anne",
+      "year": 1852
+    },
+    {
+      "author": "George Meredith",
+      "author_id": "meredith_george",
+      "categories": [
+        "dialogue",
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "meredith_george/diana_of_the_crossways_complete.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "4470",
+      "source_url": "https://www.gutenberg.org/ebooks/4470",
+      "title": "Diana of the Crossways — Complete",
+      "year": 1885
+    },
+    {
+      "author": "Anthony Hope",
+      "author_id": "hope_anthony",
+      "categories": [
+        "adventure",
+        "historical"
+      ],
+      "language": "en",
+      "path": "hope_anthony/rupert_of_hentzau_from_the_memoirs_of_fritz_von_tarlenheim.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1145",
+      "source_url": "https://www.gutenberg.org/ebooks/1145",
+      "title": "Rupert of Hentzau: From The Memoirs of Fritz Von Tarlenheim",
+      "year": 1898
+    },
+    {
+      "author": "George Gissing",
+      "author_id": "gissing_george",
+      "categories": [
+        "social",
+        "conflict",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "gissing_george/new_grub_street.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1709",
+      "source_url": "https://www.gutenberg.org/ebooks/1709",
+      "title": "New Grub Street",
+      "year": 1891
+    },
+    {
+      "author": "Arnold Bennett",
+      "author_id": "bennett_arnold",
+      "categories": [
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "bennett_arnold/the_old_wives_tale.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "5247",
+      "source_url": "https://www.gutenberg.org/ebooks/5247",
+      "title": "The Old Wives' Tale",
+      "year": 1908
+    },
+    {
+      "author": "Marie Corelli",
+      "author_id": "corelli_marie",
+      "categories": [
+        "gothic",
+        "speculative"
+      ],
+      "language": "en",
+      "path": "corelli_marie/the_sorrows_of_satan.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "42332",
+      "source_url": "https://www.gutenberg.org/ebooks/42332",
+      "title": "The Sorrows of Satan",
+      "year": 1895
+    },
+    {
+      "author": "Charlotte Yonge",
+      "author_id": "yonge_charlotte",
+      "categories": [
+        "relationship",
+        "social"
+      ],
+      "language": "en",
+      "path": "yonge_charlotte/the_heir_of_redclyffe.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2505",
+      "source_url": "https://www.gutenberg.org/ebooks/2505",
+      "title": "The Heir of Redclyffe",
+      "year": 1853
+    },
+    {
+      "author": "Margaret Oliphant",
+      "author_id": "oliphant_margaret",
+      "categories": [
+        "social",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "oliphant_margaret/miss_marjoribanks.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "41286",
+      "source_url": "https://www.gutenberg.org/ebooks/41286",
+      "title": "Miss Marjoribanks",
+      "year": 1866
+    },
+    {
+      "author": "Mrs. Humphry Ward",
+      "author_id": "ward_humphry_mrs",
+      "categories": [
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "ward_humphry_mrs/robert_elsmere.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "8737",
+      "source_url": "https://www.gutenberg.org/ebooks/8737",
+      "title": "Robert Elsmere",
+      "year": 1888
+    },
+    {
+      "author": "R. D. Blackmore",
+      "author_id": "blackmore_r_d",
+      "categories": [
+        "historical",
+        "adventure",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "blackmore_r_d/lorna_doone_a_romance_of_exmoor.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "840",
+      "source_url": "https://www.gutenberg.org/ebooks/840",
+      "title": "Lorna Doone: A Romance of Exmoor",
+      "year": 1869
+    },
+    {
+      "author": "Charles Reade",
+      "author_id": "reade_charles",
+      "categories": [
+        "historical",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "reade_charles/the_cloister_and_the_hearth.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1366",
+      "source_url": "https://www.gutenberg.org/ebooks/1366",
+      "title": "The Cloister and the Hearth",
+      "year": 1861
+    },
+    {
+      "author": "Susan Warner",
+      "author_id": "warner_susan",
+      "categories": [
+        "first_person",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "warner_susan/the_wide_wide_world.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "18689",
+      "source_url": "https://www.gutenberg.org/ebooks/18689",
+      "title": "The Wide, Wide World",
+      "year": 1850
+    },
+    {
+      "author": "Harriet Beecher Stowe",
+      "author_id": "stowe_harriet_beecher",
+      "categories": [
+        "social",
+        "conflict",
+        "historical"
+      ],
+      "language": "en",
+      "path": "stowe_harriet_beecher/uncle_toms_cabin.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "203",
+      "source_url": "https://www.gutenberg.org/ebooks/203",
+      "title": "Uncle Tom's Cabin",
+      "year": 1852
+    },
+    {
+      "author": "Frederick Douglass",
+      "author_id": "douglass_frederick",
+      "categories": [
+        "first_person",
+        "historical"
+      ],
+      "language": "en",
+      "path": "douglass_frederick/narrative_of_the_life_of_frederick_douglass_an_american_slav.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "23",
+      "source_url": "https://www.gutenberg.org/ebooks/23",
+      "title": "Narrative of the Life of Frederick Douglass, an American Slave",
+      "year": 1845
+    },
+    {
+      "author": "Herman Melville",
+      "author_id": "melville_herman",
+      "categories": [
+        "adventure",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "melville_herman/typee_a_romance_of_the_south_seas.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1900",
+      "source_url": "https://www.gutenberg.org/ebooks/1900",
+      "title": "Typee: A Romance of the South Seas",
+      "year": 1846
+    },
+    {
+      "author": "Arthur Conan Doyle",
+      "author_id": "doyle_arthur_conan",
+      "categories": [
+        "historical",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "doyle_arthur_conan/the_white_company.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "903",
+      "source_url": "https://www.gutenberg.org/ebooks/903",
+      "title": "The White Company",
+      "year": 1891
+    },
+    {
+      "author": "Wilkie Collins",
+      "author_id": "collins_wilkie",
+      "categories": [
+        "mystery",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "collins_wilkie/the_law_and_the_lady.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1622",
+      "source_url": "https://www.gutenberg.org/ebooks/1622",
+      "title": "The Law and the Lady",
+      "year": 1875
+    },
+    {
+      "author": "H. Rider Haggard",
+      "author_id": "haggard_h_rider",
+      "categories": [
+        "speculative",
+        "adventure",
+        "gothic"
+      ],
+      "language": "en",
+      "path": "haggard_h_rider/she.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "3155",
+      "source_url": "https://www.gutenberg.org/ebooks/3155",
+      "title": "She",
+      "year": 1887
+    },
+    {
+      "author": "Charles Kingsley",
+      "author_id": "kingsley_charles",
+      "categories": [
+        "adventure",
+        "historical"
+      ],
+      "language": "en",
+      "path": "kingsley_charles/westward_ho_or_the_voyages_and_adventures_of_sir_amyas_leigh.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1860",
+      "source_url": "https://www.gutenberg.org/ebooks/1860",
+      "title": "Westward Ho! Or, The Voyages and Adventures of Sir Amyas Leigh, Knight, of Burrough, in the County of Devon, in the Reign of Her Most Glorious Majesty Queen Elizabeth",
+      "year": 1855
+    },
+    {
+      "author": "George Eliot",
+      "author_id": "eliot_george",
+      "categories": [
+        "social",
+        "conflict",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "eliot_george/felix_holt_the_radical.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "40882",
+      "source_url": "https://www.gutenberg.org/ebooks/40882",
+      "title": "Felix Holt, the Radical",
+      "year": 1866
+    },
+    {
+      "author": "Anthony Trollope",
+      "author_id": "trollope_anthony",
+      "categories": [
+        "dialogue",
+        "social"
+      ],
+      "language": "en",
+      "path": "trollope_anthony/phineas_finn.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "18000",
+      "source_url": "https://www.gutenberg.org/ebooks/18000",
+      "title": "Phineas Finn",
+      "year": 1869
+    },
+    {
+      "author": "Anthony Trollope",
+      "author_id": "trollope_anthony",
+      "categories": [
+        "mystery",
+        "social"
+      ],
+      "language": "en",
+      "path": "trollope_anthony/the_eustace_diamonds.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "7381",
+      "source_url": "https://www.gutenberg.org/ebooks/7381",
+      "title": "The Eustace Diamonds",
+      "year": 1871
+    },
+    {
+      "author": "Elizabeth Gaskell",
+      "author_id": "gaskell_elizabeth",
+      "categories": [
+        "social",
+        "relationship",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "gaskell_elizabeth/ruth.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "4275",
+      "source_url": "https://www.gutenberg.org/ebooks/4275",
+      "title": "Ruth",
+      "year": 1853
+    },
+    {
+      "author": "Thomas Hardy",
+      "author_id": "hardy_thomas",
+      "categories": [
+        "relationship",
+        "dialogue"
+      ],
+      "language": "en",
+      "path": "hardy_thomas/a_pair_of_blue_eyes.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "224",
+      "source_url": "https://www.gutenberg.org/ebooks/224",
+      "title": "A pair of blue eyes",
+      "year": 1873
+    },
+    {
+      "author": "William Dean Howells",
+      "author_id": "howells_william_dean",
+      "categories": [
+        "social",
+        "relationship"
+      ],
+      "language": "en",
+      "path": "howells_william_dean/a_modern_instance.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "8203",
+      "source_url": "https://www.gutenberg.org/ebooks/8203",
+      "title": "A Modern Instance",
+      "year": 1882
+    },
+    {
+      "author": "Frank Norris",
+      "author_id": "norris_frank",
+      "categories": [
+        "social",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "norris_frank/the_octopus_a_story_of_california.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "268",
+      "source_url": "https://www.gutenberg.org/ebooks/268",
+      "title": "The Octopus : A Story of California",
+      "year": 1901
+    },
+    {
+      "author": "Joseph Conrad",
+      "author_id": "conrad_joseph",
+      "categories": [
+        "conflict",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "conrad_joseph/under_western_eyes.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "2480",
+      "source_url": "https://www.gutenberg.org/ebooks/2480",
+      "title": "Under Western Eyes",
+      "year": 1911
+    },
+    {
+      "author": "Bram Stoker",
+      "author_id": "stoker_bram",
+      "categories": [
+        "gothic",
+        "suspense"
+      ],
+      "language": "en",
+      "path": "stoker_bram/the_jewel_of_seven_stars.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "3781",
+      "source_url": "https://www.gutenberg.org/ebooks/3781",
+      "title": "The Jewel of Seven Stars",
+      "year": 1903
+    },
+    {
+      "author": "Wilkie Collins",
+      "author_id": "collins_wilkie",
+      "categories": [
+        "mystery",
+        "conflict"
+      ],
+      "language": "en",
+      "path": "collins_wilkie/man_and_wife.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "1586",
+      "source_url": "https://www.gutenberg.org/ebooks/1586",
+      "title": "Man and Wife",
+      "year": 1870
+    },
+    {
+      "author": "H. G. Wells",
+      "author_id": "wells_h_g",
+      "categories": [
+        "speculative",
+        "adventure"
+      ],
+      "language": "en",
+      "path": "wells_h_g/the_war_in_the_air.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "780",
+      "source_url": "https://www.gutenberg.org/ebooks/780",
+      "title": "The War in the Air",
+      "year": 1908
+    },
+    {
+      "author": "Arthur Machen",
+      "author_id": "machen_arthur",
+      "categories": [
+        "gothic",
+        "speculative"
+      ],
+      "language": "en",
+      "path": "machen_arthur/the_great_god_pan.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "389",
+      "source_url": "https://www.gutenberg.org/ebooks/389",
+      "title": "The Great God Pan",
+      "year": 1894
+    },
+    {
+      "author": "Algernon Blackwood",
+      "author_id": "blackwood_algernon",
+      "categories": [
+        "gothic",
+        "speculative",
+        "first_person"
+      ],
+      "language": "en",
+      "path": "blackwood_algernon/the_willows.txt",
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "source": "Project Gutenberg",
+      "source_id": "11438",
+      "source_url": "https://www.gutenberg.org/ebooks/11438",
+      "title": "The Willows",
+      "year": 1907
+    }
+  ]
+}

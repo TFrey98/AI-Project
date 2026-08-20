@@ -180,3 +180,23 @@ def test_warm_start_tokenizer_rejects_special_token_reorder():
                 ),
             },
         )
+
+
+def test_foundation_warm_start_rejects_character_special_tokens():
+    source = ByteBPETokenizer(
+        merges=[],
+        special_tokens=("<|character|>", "<|assistant|>"),
+    )
+    checkpoint = {
+        "extra": {"tokenizer": source.to_dict()}
+    }
+
+    with pytest.raises(ValueError, match="preserve existing"):
+        tokenizer_for_warm_start(
+            checkpoint,
+            {
+                "type": "byte_bpe",
+                "vocab_size": 256,
+                "special_tokens": [],
+            },
+        )

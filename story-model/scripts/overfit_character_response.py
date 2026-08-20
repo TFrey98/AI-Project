@@ -6,6 +6,7 @@ import argparse
 
 import torch
 
+from story_model.character_chat import generate_character_response
 from story_model.character_data import (
     CHARACTER_CONTROL_TOKENS,
     load_character_context,
@@ -157,7 +158,31 @@ def main() -> None:
             "The model failed to overfit one character response"
         )
 
-    print("response-only single-batch overfit: passed")
+    generation = generate_character_response(
+        model=model,
+        tokenizer=tokenizer,
+        context=context,
+        block_size=args.block_size,
+        device=device,
+        max_new_tokens=min(
+            args.block_size - 1,
+            max(32, example.supervised_tokens + 16),
+        ),
+        seed=1337,
+        greedy=True,
+    )
+    exact_response = generation.text == context.target_response
+    end_stop = generation.stop_reason == "end"
+    print(f"generated response: {generation.text}")
+    print(f"exact response: {exact_response}")
+    print(f"stop reason: {generation.stop_reason}")
+
+    if not exact_response or not end_stop:
+        raise RuntimeError(
+            "Teacher-forced loss passed, but free-running generation failed"
+        )
+
+    print("response-only free-running overfit: passed")
 
 
 if __name__ == "__main__":

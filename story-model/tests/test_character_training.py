@@ -433,3 +433,36 @@ def test_character_dataset_audit_rejects_missing_coverage():
     assert not report["passed"]
     assert report["errors"]
     assert report["untagged_examples"] == 1
+
+
+def test_character_dataset_audit_can_reject_dropped_turns():
+    tokenizer = build_tokenizer()
+    context = build_context()
+    short_context = replace(
+        context,
+        recent_turns=context.recent_turns[-1:],
+    )
+    short_example = encode_character_training_record(
+        CharacterTrainingRecord("short", short_context),
+        tokenizer,
+        block_size=512,
+    )
+    report = audit_character_training_records(
+        (
+            CharacterTrainingRecord(
+                "conv_a",
+                context,
+                behavior_tags=("long_context",),
+            ),
+        ),
+        tokenizer,
+        block_size=short_example.sequence_tokens,
+        min_examples=1,
+        min_conversations=1,
+        min_examples_per_tag=1,
+        required_tags=("long_context",),
+        max_dropped_turns=0,
+    )
+
+    assert not report["passed"]
+    assert any("maximum allowed is 0" in error for error in report["errors"])

@@ -23,6 +23,11 @@ def main() -> None:
     parser.add_argument("--min-conversations", type=int, default=20)
     parser.add_argument("--min-tag-examples", type=int, default=5)
     parser.add_argument(
+        "--max-dropped-turns",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
         "--required-tag",
         action="append",
         choices=sorted(CHARACTER_BEHAVIOR_TAGS),
@@ -67,6 +72,7 @@ def main() -> None:
         min_conversations=args.min_conversations,
         min_examples_per_tag=args.min_tag_examples,
         required_tags=required_tags,
+        max_dropped_turns=args.max_dropped_turns,
     )
 
     print(f"data: {args.data}")

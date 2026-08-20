@@ -1,0 +1,31 @@
+{
+  "catalog_version": 1,
+  "documents": [
+    {
+      "path": "austen/pride_and_prejudice.txt",
+      "title": "Pride and Prejudice",
+      "author": "Jane Austen",
+      "author_id": "austen_jane",
+      "source": "Project Gutenberg",
+      "source_id": "1342",
+      "source_url": "https://www.gutenberg.org/ebooks/1342",
+      "language": "en",
+      "year": 1813,
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "categories": ["dialogue", "social", "relationship"]
+    },
+    {
+      "path": "stevenson/treasure_island.txt",
+      "title": "Treasure Island",
+      "author": "Robert Louis Stevenson",
+      "author_id": "stevenson_robert_louis",
+      "source": "Project Gutenberg",
+      "source_id": "120",
+      "source_url": "https://www.gutenberg.org/ebooks/120",
+      "language": "en",
+      "year": 1883,
+      "rights": "Public domain in the United States; verify local jurisdiction",
+      "categories": ["dialogue", "adventure", "conflict"]
+    }
+  ]
+}
