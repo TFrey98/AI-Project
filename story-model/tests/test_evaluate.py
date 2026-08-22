@@ -182,6 +182,9 @@ def test_checkpoint_evaluation_encodes_only_requested_split(monkeypatch):
         def token_byte_length(self, token_id):
             return 1
 
+        def to_dict(self):
+            return {"type": "recording", "vocab_size": self.vocab_size}
+
     source_model = BigramLanguageModel(vocabulary_size=5)
     checkpoint = {
         "step": 10,

@@ -9,7 +9,9 @@ from story_model.train import (
     early_stopping_reached,
     learning_rate_for_step,
     save_best_validation_checkpoint,
+    tokenizer_for_reuse,
     tokenizer_for_warm_start,
+    validate_resume_fingerprints,
     validation_loss_improved,
 )
 
@@ -200,3 +202,61 @@ def test_foundation_warm_start_rejects_character_special_tokens():
                 "special_tokens": [],
             },
         )
+
+
+def test_tokenizer_reuse_preserves_exact_bpe_ids():
+    source = ByteBPETokenizer(
+        merges=[(ord("t"), ord("h")), (256, ord("e"))],
+        special_tokens=(),
+    )
+    checkpoint = {"extra": {"tokenizer": source.to_dict()}}
+
+    reused = tokenizer_for_reuse(
+        checkpoint,
+        {
+            "type": "byte_bpe",
+            "vocab_size": 258,
+            "special_tokens": [],
+        },
+    )
+
+    assert reused.to_dict() == source.to_dict()
+    assert reused.encode("the theatre") == source.encode("the theatre")
+
+
+def test_tokenizer_reuse_rejects_vocabulary_mismatch():
+    source = ByteBPETokenizer(merges=[])
+    checkpoint = {"extra": {"tokenizer": source.to_dict()}}
+
+    with pytest.raises(ValueError, match="vocabulary does not match"):
+        tokenizer_for_reuse(
+            checkpoint,
+            {
+                "type": "byte_bpe",
+                "vocab_size": 512,
+                "special_tokens": [],
+            },
+        )
+
+
+def test_resume_fingerprints_reject_changed_corpus():
+    with pytest.raises(ValueError, match="fingerprints do not match"):
+        validate_resume_fingerprints(
+            {
+                "tokenizer_sha256": "same-tokenizer",
+                "train_sha256": "old-train",
+                "val_sha256": "same-val",
+            },
+            {
+                "tokenizer_sha256": "same-tokenizer",
+                "train_sha256": "new-train",
+                "val_sha256": "same-val",
+            },
+        )
+
+
+def test_legacy_resume_without_fingerprints_remains_supported():
+    validate_resume_fingerprints(
+        None,
+        {"tokenizer_sha256": "current"},
+    )

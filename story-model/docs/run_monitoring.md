@@ -106,3 +106,8 @@ The vectorized BPE encoder preserves the original 256 merge ranks and exact
 token sequence. It accelerates corpus-sized inputs but deliberately retains the
 simple Python path for short prompts where NumPy setup would cost more than it
 saves.
+
+Training and evaluation output also prints full SHA-256 identities for the
+tokenizer and, when a manifest is configured, the manifest and corpus splits.
+Two runs should not be compared as same-corpus results unless those identities
+match; equal byte or token counts alone are not proof of identical data.

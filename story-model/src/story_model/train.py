@@ -47,6 +47,7 @@ from story_model.data import (
 )
 from story_model.models import build_model
 from story_model.progress import ProgressReporter, format_duration
+from story_model.provenance import training_fingerprints
 from story_model.runtime import (
     current_memory_bytes,
     resolve_device,
@@ -406,6 +407,84 @@ def tokenizer_for_warm_start(
     return source_tokenizer, destination_tokenizer
 
 
+def tokenizer_for_reuse(
+    checkpoint: dict,
+    tokenizer_config: dict | None,
+):
+    """Load an existing tokenizer without loading model weights.
+
+    Capacity experiments cannot warm-start when layer widths or counts
+    change, but rebuilding BPE from the current corpus would change token
+    ids at the same time as the architecture.  This strict path reuses the
+    checkpoint tokenizer exactly while leaving the new model randomly
+    initialized, isolating the intended model/context change.
+    """
+
+    tokenizer_data = checkpoint.get("extra", {}).get("tokenizer")
+
+    if tokenizer_data is None:
+        raise ValueError(
+            "tokenizer-source checkpoint has no tokenizer metadata"
+        )
+
+    tokenizer = tokenizer_from_dict(tokenizer_data)
+    tokenizer_config = tokenizer_config or {}
+    expected_type = tokenizer_config.get("type")
+    actual_type = tokenizer_data.get("type")
+
+    if expected_type is not None and expected_type != actual_type:
+        raise ValueError(
+            "tokenizer-source type does not match the current config"
+        )
+
+    if isinstance(tokenizer, ByteBPETokenizer):
+        expected_base_vocabulary = int(
+            tokenizer_config.get(
+                "vocab_size",
+                tokenizer.base_vocab_size,
+            )
+        )
+        expected_special_tokens = tuple(
+            tokenizer_config.get(
+                "special_tokens",
+                tokenizer.special_tokens,
+            )
+        )
+
+        if tokenizer.base_vocab_size != expected_base_vocabulary:
+            raise ValueError(
+                "tokenizer-source vocabulary does not match "
+                "the current config"
+            )
+
+        if tokenizer.special_tokens != expected_special_tokens:
+            raise ValueError(
+                "tokenizer-source special tokens do not match "
+                "the current config"
+            )
+
+    return tokenizer
+
+
+def validate_resume_fingerprints(
+    saved_fingerprints: dict | None,
+    current_fingerprints: dict,
+) -> None:
+    """Reject a resume that silently changes tokenizer or corpus data."""
+
+    # Checkpoints created before fingerprints were introduced remain
+    # resumable; their existing model/config compatibility checks still
+    # apply.  New checkpoints receive the stronger exact-data guard.
+    if saved_fingerprints is None:
+        return
+
+    if saved_fingerprints != current_fingerprints:
+        raise ValueError(
+            "Checkpoint tokenizer/corpus fingerprints do not match "
+            "the current training inputs"
+        )
+
+
 def get_training_batch(
     data: TrainingData,
     block_size: int,
@@ -505,10 +584,21 @@ def train(
     config_path: str,
     resume_path: str | None = None,
     warm_start_path: str | None = None,
+    tokenizer_path: str | None = None,
 ) -> None:
-    if resume_path is not None and warm_start_path is not None:
+    checkpoint_options = sum(
+        option is not None
+        for option in (
+            resume_path,
+            warm_start_path,
+            tokenizer_path,
+        )
+    )
+
+    if checkpoint_options > 1:
         raise ValueError(
-            "resume_path and warm_start_path are mutually exclusive"
+            "resume_path, warm_start_path, and tokenizer_path "
+            "are mutually exclusive"
         )
 
     config = yaml.safe_load(
@@ -629,6 +719,7 @@ def train(
 
     resume_checkpoint = None
     warm_start_checkpoint = None
+    tokenizer_checkpoint = None
     source_tokenizer = None
 
     if resume_path is not None:
@@ -675,6 +766,19 @@ def train(
             warm_start_checkpoint,
             config.get("tokenizer"),
         )
+    elif tokenizer_path is not None:
+        print(
+            "startup: loading tokenizer-source checkpoint "
+            f"{tokenizer_path}"
+        )
+        tokenizer_checkpoint = read_checkpoint(
+            tokenizer_path,
+            map_location="cpu",
+        )
+        tokenizer = tokenizer_for_reuse(
+            tokenizer_checkpoint,
+            config.get("tokenizer"),
+        )
     else:
         assert training_text is not None
         print("startup: building tokenizer from training text")
@@ -683,9 +787,10 @@ def train(
             config=config.get("tokenizer"),
         )
 
+    tokenizer_data = tokenizer.to_dict()
     checkpoint_metadata = {
         "config": config,
-        "tokenizer": tokenizer.to_dict(),
+        "tokenizer": tokenizer_data,
     }
 
     # Whichever manifest applies (document corpus vs. character dataset)
@@ -705,6 +810,13 @@ def train(
                 corpus_manifest
             )
 
+    checkpoint_metadata["fingerprints"] = training_fingerprints(
+        tokenizer_data,
+        corpus_manifest=(
+            None if character_data else corpus_manifest
+        ),
+    )
+
     if warm_start_checkpoint is not None:
         assert source_tokenizer is not None
         # Recorded in the new checkpoint's own metadata so its provenance
@@ -722,6 +834,15 @@ def train(
             "destination_vocabulary_size": (
                 tokenizer.vocab_size
             ),
+        }
+
+    if tokenizer_checkpoint is not None:
+        checkpoint_metadata["tokenizer_source"] = {
+            "checkpoint": str(tokenizer_path),
+            "source_step": int(tokenizer_checkpoint.get("step", 0)),
+            "tokenizer_sha256": checkpoint_metadata[
+                "fingerprints"
+            ]["tokenizer_sha256"],
         }
 
     if character_data:
@@ -869,6 +990,17 @@ def train(
         )
 
         checkpoint_extra = checkpoint.get("extra", {})
+        validate_resume_fingerprints(
+            checkpoint_extra.get("fingerprints"),
+            checkpoint_metadata["fingerprints"],
+        )
+
+        for provenance_key in ("warm_start", "tokenizer_source"):
+            if provenance_key in checkpoint_extra:
+                checkpoint_metadata[provenance_key] = (
+                    checkpoint_extra[provenance_key]
+                )
+
         saved_best_validation_loss = checkpoint_extra.get(
             "best_validation_loss"
         )
@@ -965,10 +1097,36 @@ def train(
             + ", ".join(expanded_parameters)
         )
 
+    if tokenizer_checkpoint is not None:
+        print(f"tokenizer source: {tokenizer_path}")
+        print(
+            "tokenizer source completed steps: "
+            f"{tokenizer_checkpoint.get('step', 0)}"
+        )
+
     print(f"device: {device}")
     print(f"parameters: {parameter_count:,}")
     print(f"tokenizer: {tokenizer.to_dict()['type']}")
     print(f"vocabulary: {tokenizer.vocab_size}")
+    print(
+        "tokenizer SHA-256: "
+        + checkpoint_metadata["fingerprints"]["tokenizer_sha256"]
+    )
+    if "corpus_manifest_sha256" in checkpoint_metadata["fingerprints"]:
+        print(
+            "corpus manifest SHA-256: "
+            + checkpoint_metadata["fingerprints"][
+                "corpus_manifest_sha256"
+            ]
+        )
+        print(
+            "training corpus SHA-256: "
+            + checkpoint_metadata["fingerprints"]["train_sha256"]
+        )
+        print(
+            "validation corpus SHA-256: "
+            + checkpoint_metadata["fingerprints"]["val_sha256"]
+        )
     print(
         "gradient accumulation steps: "
         f"{gradient_accumulation_steps}"
@@ -1422,11 +1580,11 @@ def main() -> None:
         help="Path to a training configuration.",
     )
 
-    # A mutually exclusive group makes argparse itself reject
-    # --resume and --warm-start together, rather than relying only on
-    # train()'s own runtime check — the same constraint enforced at two
-    # layers (fast CLI-level feedback plus a defensive check for any other
-    # caller of train() directly).
+    # A mutually exclusive group makes argparse itself reject --resume,
+    # --warm-start, and --tokenizer-from combinations, rather than relying
+    # only on train()'s own runtime check — the same constraint enforced
+    # at two layers (fast CLI-level feedback plus a defensive check for
+    # any other caller of train() directly).
     checkpoint_group = parser.add_mutually_exclusive_group()
 
     checkpoint_group.add_argument(
@@ -1444,12 +1602,22 @@ def main() -> None:
         ),
     )
 
+    checkpoint_group.add_argument(
+        "--tokenizer-from",
+        default=None,
+        help=(
+            "Optional checkpoint whose tokenizer is reused exactly "
+            "without loading its model or optimizer weights."
+        ),
+    )
+
     args = parser.parse_args()
 
     train(
         config_path=args.config,
         resume_path=args.resume,
         warm_start_path=args.warm_start,
+        tokenizer_path=args.tokenizer_from,
     )
 
 

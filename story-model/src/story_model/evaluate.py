@@ -25,10 +25,15 @@ import torch
 import yaml
 
 from story_model.checkpoint import read_checkpoint
-from story_model.data import ByteBPETokenizer, load_text_splits
+from story_model.data import (
+    ByteBPETokenizer,
+    load_corpus_manifest,
+    load_text_splits,
+)
 from story_model.generate import load_generation_metadata
 from story_model.models import build_model
 from story_model.progress import ProgressReporter, format_duration
+from story_model.provenance import training_fingerprints
 from story_model.runtime import resolve_device, synchronize_device
 
 
@@ -343,6 +348,13 @@ def evaluate_checkpoint(
     train_text, val_text = load_text_splits(
         evaluation_data_config
     )
+    evaluation_manifest = load_corpus_manifest(
+        evaluation_data_config
+    )
+    fingerprints = training_fingerprints(
+        tokenizer.to_dict(),
+        evaluation_manifest,
+    )
     data_seconds = time.monotonic() - data_started_at
     selected_splits = (
         ("train", "val")
@@ -371,6 +383,7 @@ def evaluate_checkpoint(
         "step": int(checkpoint.get("step", 0)),
         "device": str(device),
         "data_override": data_config is not None,
+        "fingerprints": fingerprints,
         "splits": {},
         "timings_seconds": {
             "checkpoint_load": checkpoint_seconds,
@@ -596,6 +609,20 @@ def main() -> None:
     print(f"checkpoint: {results['checkpoint']}")
     print(f"completed updates: {results['step']}")
     print(f"device: {results['device']}")
+    print(
+        "tokenizer SHA-256: "
+        + results["fingerprints"]["tokenizer_sha256"]
+    )
+
+    if "corpus_manifest_sha256" in results["fingerprints"]:
+        print(
+            "corpus manifest SHA-256: "
+            + results["fingerprints"]["corpus_manifest_sha256"]
+        )
+        print(
+            "validation corpus SHA-256: "
+            + results["fingerprints"]["val_sha256"]
+        )
 
     if args.data_config is not None:
         print(f"evaluation data: {args.data_config}")

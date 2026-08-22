@@ -42,6 +42,15 @@ python scripts/run_with_monitor.py \
 See `docs/run_monitoring.md` for monitored evaluation, progress/ETA output,
 run summaries, and interpretation of common performance patterns.
 
+## Phase 24 foundation-v3 capacity experiment
+
+Phase 24 tests an 11.4M-parameter, 512-token-context foundation while keeping
+the foundation-v2 corpus, BPE token IDs, and 4,096 sampled tokens per update
+fixed.  It adds `--tokenizer-from` so a differently sized model can start with
+random weights while reusing a checkpoint's tokenizer exactly.  Run the smoke,
+pilot, and full gates in order; the exact commands and acceptance criteria are
+in `docs/foundation_v3.md`.
+
 ## Phase 12 document corpus
 
 Place at least two UTF-8 `.txt` documents under `data/raw/`. The
