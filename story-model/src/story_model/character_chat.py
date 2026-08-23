@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Protocol, Union
 
 import torch
 from torch import nn
@@ -32,6 +32,12 @@ class CharacterGeneration:
     prompt_tokens: int
     stop_reason: str
     seed: int
+
+
+class TextResponse(Protocol):
+    """Minimal response shape accepted by CharacterChatSession."""
+
+    text: str
 
 
 @dataclass(frozen=True)
@@ -185,7 +191,7 @@ class CharacterChatSession:
     def __init__(
         self,
         context: CharacterContext,
-        response_generator: Callable[[CharacterContext, int], CharacterGeneration],
+        response_generator: Callable[[CharacterContext, int], TextResponse],
     ) -> None:
         if not isinstance(context, CharacterContext):
             raise TypeError("context must be a CharacterContext")
@@ -203,7 +209,7 @@ class CharacterChatSession:
     def has_pending_user_turn(self) -> bool:
         return bool(self._turns and self._turns[-1].role == "user")
 
-    def respond(self, user_text: Optional[str] = None) -> CharacterGeneration:
+    def respond(self, user_text: Optional[str] = None) -> TextResponse:
         """Add a user turn when supplied, then generate its response."""
 
         if user_text is not None:

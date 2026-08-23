@@ -51,6 +51,16 @@ random weights while reusing a checkpoint's tokenizer exactly.  Run the smoke,
 pilot, and full gates in order; the exact commands and acceptance criteria are
 in `docs/foundation_v3.md`.
 
+## Phase 25 neutral conversation backbone
+
+The character runtime can use a deterministic test backbone or a coherent
+instruction model served locally through an OpenAI-compatible endpoint.  The
+adapter refuses non-loopback endpoints so character memories remain on the
+machine.  A seven-case neutral gate tests question answering, supplied facts,
+unknown information, multi-turn memory, contradiction correction, reference
+tracking, and cause/effect before Vera-specific training begins.  See
+`docs/phase25_neutral_backbone.md` for setup and commands.
+
 ## Phase 12 document corpus
 
 Place at least two UTF-8 `.txt` documents under `data/raw/`. The

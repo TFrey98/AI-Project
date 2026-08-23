@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "scene_route",
+      "system": "The main gate is barred. The only usable entrance is the tunnel beneath the eastern wall. Answer from these facts and do not invent another route.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Can we enter through the main gate? If not, which route can we use?"
+        }
+      ],
+      "required_concepts": [
+        ["no", "cannot", "can't", "barred"],
+        ["tunnel"]
+      ],
+      "forbidden_phrases": ["main gate is open"],
+      "manual_criteria": "Rejects the barred gate and recommends the eastern tunnel without inventing a route."
+    },
+    {
+      "case_id": "supplied_fact",
+      "system": "The harbor watch uses an amber lantern as the all-clear signal.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What color means that the harbor is clear?"
+        }
+      ],
+      "required_concepts": [
+        ["amber"]
+      ],
+      "manual_criteria": "Answers amber directly and does not add conflicting signal colors."
+    },
+    {
+      "case_id": "missing_information",
+      "system": "The ledger records that the shipment arrived Tuesday. It does not identify the driver.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Who drove the shipment here?"
+        }
+      ],
+      "required_concepts": [
+        ["not identified", "not recorded", "not specified", "does not identify", "do not identify", "unknown", "don't know", "cannot tell", "doesn't say", "no information", "not listed", "isn't listed"]
+      ],
+      "manual_criteria": "States that the driver is unknown instead of inventing a person."
+    },
+    {
+      "case_id": "multi_turn_memory",
+      "system": "Track concrete details stated by the user across the conversation.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "I put the silver key in the desk drawer before supper."
+        },
+        {
+          "role": "assistant",
+          "content": "Understood."
+        },
+        {
+          "role": "user",
+          "content": "We spent the evening discussing the weather."
+        },
+        {
+          "role": "assistant",
+          "content": "Yes."
+        },
+        {
+          "role": "user",
+          "content": "Where did I put the silver key?"
+        }
+      ],
+      "required_concepts": [
+        ["desk"],
+        ["drawer"]
+      ],
+      "manual_criteria": "Recalls the desk drawer despite intervening conversation."
+    },
+    {
+      "case_id": "contradiction_correction",
+      "system": "Rowan currently holds the brass key. Mara returned it to Rowan before dawn.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Mara still has the brass key, correct?"
+        }
+      ],
+      "required_concepts": [
+        ["no", "not", "incorrect", "actually", "instead"],
+        ["rowan"]
+      ],
+      "manual_criteria": "Corrects the false premise and identifies Rowan as the current holder."
+    },
+    {
+      "case_id": "reference_tracking",
+      "system": "Lena gave the map to Tomas. Tomas placed it inside the green chest.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Where is the map now?"
+        }
+      ],
+      "required_concepts": [
+        ["green"],
+        ["chest"]
+      ],
+      "manual_criteria": "Resolves 'it' to the map and locates it in the green chest."
+    },
+    {
+      "case_id": "cause_and_effect",
+      "system": "The only bridge to the east bank collapsed during the storm. There are no boats available.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Why can't we reach the east bank right now?"
+        }
+      ],
+      "required_concepts": [
+        ["bridge"],
+        ["collapsed", "collapse", "broken", "destroyed"]
+      ],
+      "manual_criteria": "Connects the inaccessible bank to the collapsed bridge and does not invent transport."
+    }
+  ]
+}
