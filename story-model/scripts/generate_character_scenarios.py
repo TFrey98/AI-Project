@@ -25,13 +25,26 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--greedy", action="store_true")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Generate only the first N records after loading the split.",
+    )
     args = parser.parse_args()
+
+    if args.limit is not None and args.limit < 1:
+        raise ValueError("limit must be positive")
 
     runtime = load_character_runtime(
         args.checkpoint,
         device=args.device,
     )
     records = load_character_training_records(args.data)
+
+    if args.limit is not None:
+        records = records[: args.limit]
+
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lines = []

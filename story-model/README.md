@@ -61,6 +61,15 @@ unknown information, multi-turn memory, contradiction correction, reference
 tracking, and cause/effect before Vera-specific training begins.  See
 `docs/phase25_neutral_backbone.md` for setup and commands.
 
+## Phase 26 neutral instruction tuning
+
+Foundation-v3 passed the Phase 25 execution checks but scored 0/7 on logical
+conversation. Phase 26 warm-starts that same Transformer on a deterministic
+3,000-example neutral response curriculum with 500 structurally held-out
+validation examples. Smoke and pilot gates prevent a long run when the model
+only memorizes templates. See `docs/phase26_neutral_instruction.md` for the
+dataset, commands, and acceptance criteria.
+
 ## Phase 12 document corpus
 
 Place at least two UTF-8 `.txt` documents under `data/raw/`. The

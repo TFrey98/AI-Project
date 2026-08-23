@@ -1,4 +1,5 @@
-"""Evaluate a local instruction model on neutral conversation mechanics."""
+"""Evaluate a local instruction model or from-scratch checkpoint on
+neutral conversation mechanics."""
 
 from __future__ import annotations
 
@@ -11,11 +12,28 @@ from story_model.conversation_gate import (
     load_conversation_gate,
     run_conversation_gate,
 )
+from story_model.foundation_backbone import FoundationCheckpointBackbone
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True)
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
+        "--model",
+        help=(
+            "Model name served by the local OpenAI-compatible endpoint. "
+            "Mutually exclusive with --checkpoint."
+        ),
+    )
+    source_group.add_argument(
+        "--checkpoint",
+        help=(
+            "Path to one of this project's own checkpoints (e.g. "
+            "checkpoints/transformer_foundation_v3/best.pt) to test the "
+            "from-scratch model directly, with no server required. "
+            "Mutually exclusive with --model."
+        ),
+    )
     parser.add_argument(
         "--data",
         default="examples/generic_conversation_gate.json",
@@ -23,6 +41,11 @@ def main() -> None:
     parser.add_argument(
         "--endpoint",
         default="http://127.0.0.1:11434/v1/chat/completions",
+    )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="Device for --checkpoint: auto, cpu, mps, or cuda.",
     )
     parser.add_argument("--output", default=None)
     parser.add_argument("--max-new-tokens", type=int, default=160)
@@ -33,11 +56,19 @@ def main() -> None:
     args = parser.parse_args()
 
     cases = load_conversation_gate(args.data)
-    backbone = LocalOpenAIBackbone(
-        model=args.model,
-        endpoint=args.endpoint,
-        timeout_seconds=args.timeout,
-    )
+
+    if args.checkpoint is not None:
+        backbone = FoundationCheckpointBackbone(
+            checkpoint_path=args.checkpoint,
+            device=args.device,
+        )
+    else:
+        backbone = LocalOpenAIBackbone(
+            model=args.model,
+            endpoint=args.endpoint,
+            timeout_seconds=args.timeout,
+        )
+
     results = run_conversation_gate(
         backbone,
         cases,

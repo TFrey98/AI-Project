@@ -1,0 +1,52 @@
+tokenizer:
+  type: byte_bpe
+  vocab_size: 512
+  min_frequency: 2
+  special_tokens:
+    - "<|character|>"
+    - "<|relationship|>"
+    - "<|scene|>"
+    - "<|world_facts|>"
+    - "<|memories|>"
+    - "<|conversation|>"
+    - "<|user|>"
+    - "<|assistant|>"
+    - "<|end|>"
+
+model:
+  name: transformer
+  position_encoding: rope
+  normalization: layernorm
+  feed_forward_activation: swiglu
+  embedding_dim: 384
+  attention_heads: 6
+  layers: 8
+  feed_forward_dim: 1024
+  dropout: 0.1
+
+data:
+  type: character_jsonl
+  train_path: data/character/neutral_instruction/train.jsonl
+  val_path: data/character/neutral_instruction/val.jsonl
+  manifest_path: data/character/neutral_instruction/manifest.json
+  block_size: 1024
+  batch_size: 2
+
+train:
+  seed: 1337
+  learning_rate: 5.0e-5
+  min_learning_rate: 5.0e-6
+  warmup_steps: 400
+  max_steps: 10000
+  gradient_accumulation_steps: 4
+  gradient_clip: 1.0
+  weight_decay: 0.01
+  log_interval: 50
+  eval_interval: 250
+  eval_iters: 100
+  early_stopping_patience: 8
+  device: auto
+
+checkpoint:
+  dir: checkpoints/transformer_neutral_instruction
+  save_interval: 1000
