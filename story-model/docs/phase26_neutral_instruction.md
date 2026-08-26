@@ -115,8 +115,13 @@ Generate held-out answers for manual inspection:
   --device mps \
   --greedy \
   --limit 50 \
+  --evenly-spaced \
   --max-new-tokens 80
 ```
+
+`--evenly-spaced` prevents `--limit` from selecting only the file prefix. With
+the default balanced 500-row validation file, this command selects five
+records from each skill rather than 50 rows from `scene_route`.
 
 Repeat the Phase 25 checkpoint-backed conversation-gate command, replacing its
 checkpoint with:
@@ -130,7 +135,43 @@ answers cleanly, and passes at least 5/7 automatic checks.  A low validation
 loss combined with another 0/7 gate means it learned dataset templates without
 learning the task; extending that run would not be justified.
 
-## 4. Full run
+## 4. Diagnose a failed pilot before changing capacity
+
+If validation loss improves but the conversation gate still fails, compare
+free-running behavior on stratified training and validation records:
+
+```bash
+.venv/bin/python scripts/diagnose_neutral_instruction.py \
+  --checkpoint checkpoints/transformer_neutral_instruction_pilot/best.pt \
+  --device mps \
+  --examples-per-skill 3 \
+  --max-new-tokens 80 \
+  --output runs/phase26-neutral-diagnosis.jsonl
+```
+
+For every selected record the diagnostic runs greedy generation twice: once
+with the complete prompt and once with task evidence removed from scene,
+memory, world facts, and older turns.  It reports exact responses, clean end
+stops, similarity to the reference, repetition loops, prompt truncation, and
+whether the complete context improved reference similarity by at least 0.05.
+Merely changing after ablation is not counted as grounding.
+
+Interpret the train/validation comparison before choosing a remedy:
+
+| Result | Primary diagnosis | Next experiment |
+| --- | --- | --- |
+| Train generation also loops despite very low train loss | Teacher-forcing/free-running collapse | Increase target variation and add short free-running regression gates; do not increase updates |
+| Train is accurate, validation is poor | Template or vocabulary transfer failure | Expand paraphrases and compositional combinations, then rebuild both splits |
+| Full and evidence-free outputs are equally close to the reference | Prompt evidence is being ignored | Add matched counterfactual pairs whose answer changes with exactly one fact |
+| Prompts are truncated or sit at the generation budget | Context-length distribution mismatch | Shorten or relocate evidence, or train at the intended context length |
+| Train and validation are grounded but the Phase 25 gate alone fails | Gate/prompt distribution mismatch | Add a third untouched deployment-like split without copying gate answers |
+
+Only test a larger model after the diagnostic rules out these data and
+objective failures.  A capacity-limited model normally leaves training loss
+high; a training loss near zero is direct evidence that the current model can
+memorize the curriculum.
+
+## 5. Full run
 
 ```bash
 .venv/bin/python -m story_model.train \
@@ -147,7 +188,3 @@ Final Phase 26 acceptance requires all seven Phase 25 automatic checks plus
 manual confirmation that every response is relevant, logically supported, and
 free of invented facts.  Perplexity and response-only validation loss are
 supporting diagnostics, not substitutes for free-running generation.
-
-If the pilot cannot reach the threshold, stop and diagnose capacity, tokenizer
-compression, and curriculum transfer before spending time on the 10,000-update
-run.  Vera training remains blocked until the neutral gate passes.

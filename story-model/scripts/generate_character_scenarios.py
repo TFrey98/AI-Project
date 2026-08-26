@@ -12,6 +12,7 @@ from story_model.character_chat import (
     load_character_runtime,
 )
 from story_model.character_training import load_character_training_records
+from story_model.neutral_diagnostics import evenly_spaced_records
 
 
 def main() -> None:
@@ -31,10 +32,17 @@ def main() -> None:
         default=None,
         help="Generate only the first N records after loading the split.",
     )
+    parser.add_argument(
+        "--evenly-spaced",
+        action="store_true",
+        help="With --limit, sample across the split instead of its prefix.",
+    )
     args = parser.parse_args()
 
     if args.limit is not None and args.limit < 1:
         raise ValueError("limit must be positive")
+    if args.evenly_spaced and args.limit is None:
+        raise ValueError("--evenly-spaced requires --limit")
 
     runtime = load_character_runtime(
         args.checkpoint,
@@ -43,7 +51,11 @@ def main() -> None:
     records = load_character_training_records(args.data)
 
     if args.limit is not None:
-        records = records[: args.limit]
+        records = (
+            evenly_spaced_records(records, args.limit)
+            if args.evenly_spaced
+            else records[: args.limit]
+        )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

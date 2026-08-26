@@ -717,6 +717,75 @@ def get_character_batch(
     return inputs.to(device), targets.to(device)
 
 
+def get_paired_character_batch(
+    examples: Iterable[EncodedCharacterExample],
+    batch_size: int,
+    device: str = "cpu",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample complete adjacent conversation pairs with replacement.
+
+    Counterfactual curricula store two examples with the same
+    conversation_id next to each other.  Drawing both sides together makes
+    every microbatch contain the conflicting answers that result from
+    changing one evidence value, rather than allowing random sampling to
+    show the model only one side for many consecutive updates.
+    """
+
+    examples = tuple(examples)
+
+    if not examples:
+        raise ValueError("character examples cannot be empty")
+    if batch_size < 2 or batch_size % 2:
+        raise ValueError(
+            "paired character batch_size must be a positive even number"
+        )
+    if len(examples) % 2:
+        raise ValueError(
+            "paired character examples must contain an even number of rows"
+        )
+
+    pair_count = len(examples) // 2
+
+    for pair_index in range(pair_count):
+        first = examples[pair_index * 2]
+        second = examples[pair_index * 2 + 1]
+
+        if first.conversation_id != second.conversation_id:
+            raise ValueError(
+                "paired character examples must be adjacent and share "
+                "conversation_id"
+            )
+
+    conversation_counts = Counter(
+        example.conversation_id for example in examples
+    )
+
+    if any(count != 2 for count in conversation_counts.values()):
+        raise ValueError(
+            "each paired character conversation_id must occur exactly twice"
+        )
+
+    selected_pairs = torch.randint(
+        pair_count,
+        (batch_size // 2,),
+    )
+    indices = [
+        pair_index * 2 + side
+        for selected in selected_pairs
+        for pair_index in (int(selected),)
+        for side in (0, 1)
+    ]
+    inputs = torch.tensor(
+        [examples[index].input_ids for index in indices],
+        dtype=torch.long,
+    )
+    targets = torch.tensor(
+        [examples[index].target_ids for index in indices],
+        dtype=torch.long,
+    )
+    return inputs.to(device), targets.to(device)
+
+
 def summarize_character_examples(
     records: Iterable[CharacterTrainingRecord],
     examples: Iterable[EncodedCharacterExample],

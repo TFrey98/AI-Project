@@ -70,6 +70,33 @@ validation examples. Smoke and pilot gates prevent a long run when the model
 only memorizes templates. See `docs/phase26_neutral_instruction.md` for the
 dataset, commands, and acceptance criteria.
 
+## Phase 27 counterfactual grounding probe
+
+Phase 26 proved that low response-only loss can coexist with complete failure
+to use held-out facts. Phase 27 returns to the foundation-v3 checkpoint and
+trains adjacent minimal pairs: one evidence line changes, so the required
+answer must change with it. A compositional validation split and a separate
+lexical/paraphrase transfer split isolate the two forms of generalization.
+See `docs/phase27_counterfactual_probe.md` for the controlled two-skill probe.
+
+## Phase 28 semantic and factorized transfer
+
+Phase 27 learned evidence-grounded recombination of familiar vocabulary but
+left exact wording and combined lexical/paraphrase transfer unresolved. Phase
+28 adds structured semantic answer keys, expands the paired curriculum, and
+separates lexical-only, paraphrase-only, and combined transfer gates. Exact
+match remains visible but no longer rejects a correct paraphrase. See
+`docs/phase28_semantic_transfer.md` for the bounded pilot runbook.
+
+## Phase 29 sparse lexical copying
+
+Phase 28 passed paraphrase transfer but omitted both unfamiliar candidate
+values in nearly 90% of lexical examples. Phase 29 keeps all four Phase 28
+evaluation splits fixed and replaces the training data with paired evidence
+containing hundreds of sparsely repeated compositional values. The goal is to
+learn a general copy/select operation instead of a closed answer vocabulary.
+See `docs/phase29_lexical_copy.md` for the controlled comparison.
+
 ## Phase 12 document corpus
 
 Place at least two UTF-8 `.txt` documents under `data/raw/`. The

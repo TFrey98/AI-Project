@@ -29,6 +29,7 @@ from story_model.character_training import (
     EncodedCharacterExample,
     encode_character_training_records,
     get_character_batch,
+    get_paired_character_batch,
     load_character_dataset_splits,
 )
 from story_model.checkpoint import (
@@ -490,6 +491,7 @@ def get_training_batch(
     block_size: int,
     batch_size: int,
     device: str,
+    character_batch_sampling: str = "random",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Dispatch to continuous-text or response-masked batching.
 
@@ -509,10 +511,22 @@ def get_training_batch(
             device,
         )
 
-    return get_character_batch(
-        data,
-        batch_size,
-        device,
+    if character_batch_sampling == "random":
+        return get_character_batch(
+            data,
+            batch_size,
+            device,
+        )
+    if character_batch_sampling == "paired_conversation":
+        return get_paired_character_batch(
+            data,
+            batch_size,
+            device,
+        )
+
+    raise ValueError(
+        "Unknown character batch sampling mode: "
+        f"{character_batch_sampling!r}"
     )
 
 
@@ -525,6 +539,7 @@ def estimate_loss(
     batch_size: int,
     eval_iters: int,
     device: str,
+    character_batch_sampling: str = "random",
 ) -> dict[str, float]:
     """Estimate train/val loss by averaging over several random batches.
 
@@ -563,6 +578,7 @@ def estimate_loss(
                 block_size,
                 batch_size,
                 device,
+                character_batch_sampling,
             )
 
             _, loss = model(inputs, targets)
@@ -693,6 +709,23 @@ def train(
         )
 
     character_data = data_type == "character_jsonl"
+    character_batch_sampling = data_config.get(
+        "batch_sampling",
+        "random",
+    )
+
+    if character_batch_sampling not in {
+        "random",
+        "paired_conversation",
+    }:
+        raise ValueError(
+            "Unknown character batch sampling mode: "
+            f"{character_batch_sampling!r}"
+        )
+    if not character_data and character_batch_sampling != "random":
+        raise ValueError(
+            "paired character sampling requires character_jsonl data"
+        )
     training_records = None
     validation_records = None
     character_manifest = None
@@ -1149,6 +1182,10 @@ def train(
         # RESPONSE_IGNORE_INDEX masking).
         print("data type: character_jsonl")
         print("loss objective: response_only")
+        print(
+            "character batch sampling: "
+            f"{character_batch_sampling}"
+        )
         print(f"training examples: {len(train_data):,}")
         print(f"validation examples: {len(val_data):,}")
         print(
@@ -1257,6 +1294,7 @@ def train(
                 batch_size=batch_size,
                 eval_iters=eval_iters,
                 device=device,
+                character_batch_sampling=character_batch_sampling,
             )
 
             synchronize_device(device)
@@ -1348,6 +1386,7 @@ def train(
                 block_size,
                 batch_size,
                 device,
+                character_batch_sampling,
             )
 
             # Counts unmasked (non-RESPONSE_IGNORE_INDEX) target positions
@@ -1499,6 +1538,7 @@ def train(
         batch_size=batch_size,
         eval_iters=eval_iters,
         device=device,
+        character_batch_sampling=character_batch_sampling,
     )
 
     final_path = (

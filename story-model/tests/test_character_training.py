@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 import pytest
+import torch
 
 from story_model.character_data import (
     ASSISTANT_MARKER,
@@ -22,6 +23,7 @@ from story_model.character_training import (
     character_training_record_to_json,
     encode_character_training_record,
     get_character_batch,
+    get_paired_character_batch,
     load_character_dataset_splits,
     load_character_training_records,
     save_character_training_records,
@@ -385,6 +387,56 @@ def test_character_batch_and_summary_shapes():
     assert summary["examples"] == 2
     assert summary["conversations"] == 2
     assert summary["supervised_tokens"] > 0
+
+
+def test_paired_character_batch_keeps_counterfactual_partners_together():
+    tokenizer = build_tokenizer()
+    pair_a = replace(
+        build_context("pair_a_0"),
+        target_response="Pair A response.",
+    )
+    pair_b = replace(
+        build_context("pair_b_0"),
+        target_response="Pair B response.",
+    )
+    records = (
+        CharacterTrainingRecord("pair_a", pair_a),
+        CharacterTrainingRecord(
+            "pair_a",
+            replace(pair_a, context_id="pair_a_1"),
+        ),
+        CharacterTrainingRecord("pair_b", pair_b),
+        CharacterTrainingRecord(
+            "pair_b",
+            replace(pair_b, context_id="pair_b_1"),
+        ),
+    )
+    examples = tuple(
+        encode_character_training_record(record, tokenizer, block_size=512)
+        for record in records
+    )
+    torch.manual_seed(7)
+    inputs, targets = get_paired_character_batch(examples, batch_size=4)
+
+    assert inputs.shape == (4, 512)
+    assert targets.shape == (4, 512)
+    assert torch.equal(inputs[0], inputs[1])
+    assert torch.equal(inputs[2], inputs[3])
+
+
+def test_paired_character_batch_rejects_unpaired_rows():
+    tokenizer = build_tokenizer()
+    records = (
+        CharacterTrainingRecord("pair_a", build_context("pair_a_0")),
+        CharacterTrainingRecord("pair_b", build_context("pair_b_0")),
+    )
+    examples = tuple(
+        encode_character_training_record(record, tokenizer, block_size=512)
+        for record in records
+    )
+
+    with pytest.raises(ValueError, match="adjacent"):
+        get_paired_character_batch(examples, batch_size=2)
 
 
 def test_character_dataset_audit_passes_covered_fixture():
