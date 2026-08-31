@@ -1169,6 +1169,33 @@ _SKILL_BUILDERS = (
     _boundary_records,
 )
 
+_SKILL_BUILDERS_BY_NAME = dict(zip(NEUTRAL_SKILLS, _SKILL_BUILDERS))
+
+
+def neutral_instruction_skill_records(
+    skill: str,
+    template_split: str,
+    lexicon: NeutralLexicon,
+    count: int,
+    seed: int = 1337,
+) -> tuple[CharacterTrainingRecord, ...]:
+    """Build one skill while controlling vocabulary and wording separately.
+
+    Phase 32 needs independent lexical and paraphrase axes.  Earlier public
+    builders tied the lexicon and sentence-template split together, which made
+    that factorization impossible without reaching into private functions.
+    """
+
+    if skill not in _SKILL_BUILDERS_BY_NAME:
+        raise ValueError(f"unknown neutral instruction skill: {skill}")
+    if template_split not in {"train", "val"}:
+        raise ValueError("template_split must be 'train' or 'val'")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise ValueError("count must be a positive integer")
+
+    builder = _SKILL_BUILDERS_BY_NAME[skill]
+    return builder(template_split, lexicon, count, seed)
+
 
 def neutral_instruction_records(
     split: str,
