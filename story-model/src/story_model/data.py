@@ -671,6 +671,16 @@ class ByteBPETokenizer:
 
         return len(self._token_bytes[token_id])
 
+    def token_bytes(self, token_id: int) -> bytes:
+        """Return the exact bytes represented by one vocabulary token."""
+
+        if token_id not in self._token_bytes:
+            raise ValueError(
+                f"unknown BPE token id: {token_id}"
+            )
+
+        return bytes(self._token_bytes[token_id])
+
     def to_dict(self) -> dict:
         return {
             "type": "byte_bpe",

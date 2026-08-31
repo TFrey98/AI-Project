@@ -28,6 +28,10 @@ def main() -> None:
         default=None,
     )
     parser.add_argument(
+        "--require-copy-supervision",
+        action="store_true",
+    )
+    parser.add_argument(
         "--required-tag",
         action="append",
         choices=sorted(CHARACTER_BEHAVIOR_TAGS),
@@ -73,6 +77,7 @@ def main() -> None:
         min_examples_per_tag=args.min_tag_examples,
         required_tags=required_tags,
         max_dropped_turns=args.max_dropped_turns,
+        require_copy_supervision=args.require_copy_supervision,
     )
 
     print(f"data: {args.data}")
@@ -86,6 +91,17 @@ def main() -> None:
         f"max {report['sequence_tokens_max']:,}"
     )
     print(f"complete turns dropped: {report['dropped_turns']:,}")
+    if args.require_copy_supervision:
+        print(
+            "copy-supervised examples: "
+            f"{report['copy_examples']:,}/{report['examples']:,}"
+        )
+        print(
+            "copy-supervised tokens: "
+            f"{report['copy_supervised_tokens']:,} "
+            f"(min {report['copy_supervised_tokens_min']:,}, "
+            f"max {report['copy_supervised_tokens_max']:,})"
+        )
     print("behavior coverage:")
 
     for tag, count in report["tag_counts"].items():

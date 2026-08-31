@@ -90,6 +90,7 @@ def load_character_runtime(
         config["model"],
         vocabulary_size=tokenizer.vocab_size,
         block_size=block_size,
+        tokenizer=tokenizer,
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(resolved_device)
@@ -150,6 +151,10 @@ def generate_character_response(
         dtype=torch.long,
         device=device,
     )
+    copy_enabled = getattr(model, "copy_mechanism", "none") == (
+        "pointer_generator"
+    )
+    copy_source_mask = torch.ones_like(tokens, dtype=torch.bool)
     control_ids = set(tokenizer.special_token_ids.values())
     end_id = tokenizer.special_token_ids[END_MARKER]
     generated_ids: list[int] = []
@@ -158,7 +163,16 @@ def generate_character_response(
     seed_everything(seed)
 
     for _ in range(max_new_tokens):
-        logits, _ = model(tokens[:, -block_size:])
+        visible_tokens = tokens[:, -block_size:]
+        visible_copy_mask = copy_source_mask[:, -block_size:]
+        logits, _ = (
+            model(
+                visible_tokens,
+                copy_source_mask=visible_copy_mask,
+            )
+            if copy_enabled
+            else model(visible_tokens)
+        )
         next_token = sample_next_token(
             logits[:, -1, :],
             temperature=temperature,
@@ -175,6 +189,13 @@ def generate_character_response(
 
         generated_ids.append(token_id)
         tokens = torch.cat((tokens, next_token), dim=1)
+        copy_source_mask = torch.cat(
+            (
+                copy_source_mask,
+                torch.zeros_like(next_token, dtype=torch.bool),
+            ),
+            dim=1,
+        )
 
     return CharacterGeneration(
         text=tokenizer.decode(generated_ids).strip(),

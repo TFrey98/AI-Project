@@ -103,6 +103,7 @@ def main() -> None:
         config["model"],
         vocabulary_size=tokenizer.vocab_size,
         block_size=args.block_size,
+        tokenizer=tokenizer,
     )
     expanded_parameters = load_model_warm_start(
         model=model,

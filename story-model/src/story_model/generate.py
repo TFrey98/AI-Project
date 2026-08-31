@@ -157,6 +157,7 @@ def generate(
         config["model"],
         vocabulary_size=tokenizer.vocab_size,
         block_size=config["data"]["block_size"],
+        tokenizer=tokenizer,
     )
 
     model.load_state_dict(

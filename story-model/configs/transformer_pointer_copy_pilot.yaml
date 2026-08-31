@@ -1,0 +1,56 @@
+tokenizer:
+  type: byte_bpe
+  vocab_size: 512
+  min_frequency: 2
+  special_tokens:
+    - "<|character|>"
+    - "<|relationship|>"
+    - "<|scene|>"
+    - "<|world_facts|>"
+    - "<|memories|>"
+    - "<|conversation|>"
+    - "<|user|>"
+    - "<|assistant|>"
+    - "<|end|>"
+
+model:
+  name: transformer
+  position_encoding: rope
+  normalization: layernorm
+  feed_forward_activation: swiglu
+  embedding_dim: 384
+  attention_heads: 6
+  layers: 8
+  feed_forward_dim: 1024
+  dropout: 0.1
+  copy_mechanism: pointer_generator
+  copy_loss_weight: 0.25
+
+data:
+  type: character_jsonl
+  train_path: data/character/pointer_copy/train.jsonl
+  val_path: data/character/pointer_copy/val.jsonl
+  manifest_path: data/character/pointer_copy/manifest.json
+  block_size: 1024
+  batch_size: 2
+  batch_sampling: paired_conversation
+  copy_objective: true
+
+train:
+  seed: 1337
+  learning_rate: 5.0e-5
+  min_learning_rate: 5.0e-6
+  warmup_steps: 50
+  max_steps: 1000
+  gradient_accumulation_steps: 4
+  gradient_clip: 1.0
+  weight_decay: 0.01
+  log_interval: 25
+  eval_interval: 50
+  eval_iters: 50
+  early_stopping_patience: 8
+  device: auto
+
+checkpoint:
+  dir: checkpoints/transformer_pointer_copy_pilot
+  save_interval: 100

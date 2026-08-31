@@ -10,8 +10,11 @@ if the model reconstructed to load them into has exactly the shapes those
 weights were trained under.
 """
 
+from __future__ import annotations
+
 from torch import nn
 
+from story_model.data import ByteBPETokenizer
 from story_model.models.attention import AttentionLanguageModel
 from story_model.models.bigram import BigramLanguageModel
 from story_model.models.transformer import TransformerLanguageModel
@@ -21,6 +24,7 @@ def build_model(
     model_config: dict,
     vocabulary_size: int,
     block_size: int,
+    tokenizer: ByteBPETokenizer | None = None,
 ) -> nn.Module:
     """Dispatch on model_config["name"] to build one of this project's models.
 
@@ -56,6 +60,23 @@ def build_model(
         )
 
     if name == "transformer":
+        copy_token_bytes = None
+
+        if model_config.get("copy_mechanism") == "pointer_generator":
+            if tokenizer is not None:
+                if tokenizer.vocab_size != vocabulary_size:
+                    raise ValueError(
+                        "tokenizer and model vocabulary sizes differ"
+                    )
+                copy_token_bytes = tuple(
+                    (
+                        tuple(tokenizer.token_bytes(token_id))
+                        if token_id < tokenizer.base_vocab_size
+                        else ()
+                    )
+                    for token_id in range(vocabulary_size)
+                )
+
         return TransformerLanguageModel(
             vocabulary_size=vocabulary_size,
             block_size=block_size,
@@ -98,6 +119,15 @@ def build_model(
                 "feed_forward_activation",
                 "gelu",
             ),
+            copy_mechanism=model_config.get(
+                "copy_mechanism",
+                "none",
+            ),
+            copy_loss_weight=model_config.get(
+                "copy_loss_weight",
+                0.0,
+            ),
+            copy_token_bytes=copy_token_bytes,
         )
 
     raise ValueError(f"Unknown model name: {name!r}")

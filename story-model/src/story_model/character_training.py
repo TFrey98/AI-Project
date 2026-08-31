@@ -51,6 +51,7 @@ class CharacterTrainingRecord:
     conversation_id: str
     context: CharacterContext
     behavior_tags: tuple[str, ...] = ()
+    copy_value: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.conversation_id, str):
@@ -94,6 +95,16 @@ class CharacterTrainingRecord:
                 + ", ".join(unknown_tags)
             )
 
+        copy_value = self.copy_value
+
+        if copy_value is not None:
+            if not isinstance(copy_value, str):
+                raise TypeError("copy_value must be a string or None")
+            copy_value = copy_value.strip()
+
+            if not copy_value:
+                raise ValueError("copy_value cannot be empty")
+
         object.__setattr__(
             self,
             "conversation_id",
@@ -104,6 +115,7 @@ class CharacterTrainingRecord:
             "behavior_tags",
             behavior_tags,
         )
+        object.__setattr__(self, "copy_value", copy_value)
 
 
 @dataclass(frozen=True)
@@ -118,16 +130,44 @@ class EncodedCharacterExample:
     prompt_tokens: int
     supervised_tokens: int
     dropped_turns: int
+    copy_source_mask: tuple[bool, ...]
+    copy_targets: tuple[int, ...]
+    copy_supervised_tokens: int
+    copy_source_width: int
 
     def __post_init__(self) -> None:
         if len(self.input_ids) != len(self.target_ids):
             raise ValueError(
                 "input_ids and target_ids must have equal length"
             )
+        if len(self.copy_source_mask) != len(self.input_ids):
+            raise ValueError(
+                "copy_source_mask and input_ids must have equal length"
+            )
+        if len(self.copy_targets) != len(self.input_ids):
+            raise ValueError(
+                "copy_targets and input_ids must have equal length"
+            )
         if not 1 <= self.sequence_tokens <= len(self.input_ids):
             raise ValueError("invalid sequence_tokens count")
         if not 1 <= self.supervised_tokens <= self.sequence_tokens:
             raise ValueError("invalid supervised_tokens count")
+        observed_copy_tokens = sum(
+            position != RESPONSE_IGNORE_INDEX
+            for position in self.copy_targets
+        )
+        if self.copy_supervised_tokens != observed_copy_tokens:
+            raise ValueError("invalid copy_supervised_tokens count")
+        if self.copy_source_width < 1:
+            raise ValueError("copy_source_width must be positive")
+        if any(
+            position != RESPONSE_IGNORE_INDEX
+            and not 0
+            <= position
+            < self.sequence_tokens * self.copy_source_width
+            for position in self.copy_targets
+        ):
+            raise ValueError("copy target position is outside the sequence")
 
 
 def character_training_record_to_json(
@@ -138,13 +178,18 @@ def character_training_record_to_json(
     if not isinstance(record, CharacterTrainingRecord):
         raise TypeError("record must be a CharacterTrainingRecord")
 
+    payload = {
+        "dataset_version": CHARACTER_DATASET_VERSION,
+        "conversation_id": record.conversation_id,
+        "behavior_tags": list(record.behavior_tags),
+        "context": record.context.to_dict(),
+    }
+
+    if record.copy_value is not None:
+        payload["copy_value"] = record.copy_value
+
     return json.dumps(
-        {
-            "dataset_version": CHARACTER_DATASET_VERSION,
-            "conversation_id": record.conversation_id,
-            "behavior_tags": list(record.behavior_tags),
-            "context": record.context.to_dict(),
-        },
+        payload,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -185,6 +230,7 @@ def character_training_record_from_json(
         conversation_id=data["conversation_id"],
         context=CharacterContext.from_dict(context_data),
         behavior_tags=tuple(data.get("behavior_tags", ())),
+        copy_value=data.get("copy_value"),
     )
 
 
@@ -573,6 +619,168 @@ def _validate_character_tokenizer(
         )
 
 
+def _copy_source_width(tokenizer: ByteBPETokenizer) -> int:
+    """Return the largest ordinary BPE token measured in raw bytes."""
+
+    return max(
+        tokenizer.token_byte_length(token_id)
+        for token_id in range(tokenizer.base_vocab_size)
+    )
+
+
+def _encode_copy_aware_training_text(
+    prompt: str,
+    training_text: str,
+    tokenizer: ByteBPETokenizer,
+    copy_value: str | None,
+) -> tuple[list[int], tuple[int, ...]]:
+    """Encode annotated response spans as context-independent raw bytes."""
+
+    if not training_text.startswith(prompt):
+        raise ValueError("training text must begin with its prompt")
+
+    prompt_ids = tokenizer.encode(prompt)
+
+    if copy_value is None:
+        return tokenizer.encode(training_text), ()
+
+    response = training_text[len(prompt) :]
+    response_ids: list[int] = []
+    copy_positions: list[int] = []
+    cursor = 0
+
+    while True:
+        start = response.find(copy_value, cursor)
+
+        if start < 0:
+            break
+
+        response_ids.extend(tokenizer.encode(response[cursor:start]))
+
+        for byte_value in copy_value.encode("utf-8"):
+            copy_positions.append(len(prompt_ids) + len(response_ids))
+            response_ids.append(byte_value)
+
+        cursor = start + len(copy_value)
+
+    if not copy_positions:
+        raise ValueError(
+            f"copy_value {copy_value!r} does not occur in the target"
+        )
+
+    response_ids.extend(tokenizer.encode(response[cursor:]))
+    token_ids = prompt_ids + response_ids
+
+    if tokenizer.decode(token_ids) != training_text:
+        raise RuntimeError("copy-aware encoding changed the training text")
+
+    return token_ids, tuple(copy_positions)
+
+
+def _prompt_copy_byte_targets(
+    prompt: str,
+    prompt_ids: list[int],
+    tokenizer: ByteBPETokenizer,
+    copy_value: str,
+    source_width: int,
+) -> tuple[int, ...]:
+    """Map each copied byte to its virtual byte position in the prompt."""
+
+    prompt_bytes = prompt.encode("utf-8")
+    value_bytes = copy_value.encode("utf-8")
+    value_start = prompt_bytes.find(value_bytes)
+
+    if value_start < 0:
+        raise ValueError(
+            f"copy_value {copy_value!r} does not occur in the prompt"
+        )
+
+    value_end = value_start + len(value_bytes)
+    targets: list[int] = []
+    byte_cursor = 0
+
+    for token_position, token_id in enumerate(prompt_ids):
+        token_bytes = tokenizer.token_bytes(token_id)
+        token_end = byte_cursor + len(token_bytes)
+
+        for byte_offset in range(len(token_bytes)):
+            absolute_byte = byte_cursor + byte_offset
+
+            if value_start <= absolute_byte < value_end:
+                if byte_offset >= source_width:
+                    raise RuntimeError(
+                        "copy byte offset exceeds model source width"
+                    )
+                targets.append(
+                    token_position * source_width + byte_offset
+                )
+
+        byte_cursor = token_end
+
+    if byte_cursor != len(prompt_bytes):
+        raise RuntimeError("prompt token bytes do not cover prompt text")
+    if len(targets) != len(value_bytes):
+        raise RuntimeError("copy source does not cover every value byte")
+
+    return tuple(targets)
+
+
+def _copy_supervision(
+    record: CharacterTrainingRecord,
+    tokenizer: ByteBPETokenizer,
+    prompt: str,
+    prompt_ids: list[int],
+    sequence_tokens: int,
+    copy_response_positions: tuple[int, ...],
+    block_size: int,
+) -> tuple[tuple[bool, ...], tuple[int, ...], int, int]:
+    """Build prompt masks and byte-level pointer targets for copy loss."""
+
+    prompt_tokens = len(prompt_ids)
+    source_mask = [index < prompt_tokens for index in range(sequence_tokens)]
+    copy_targets = [RESPONSE_IGNORE_INDEX] * sequence_tokens
+    source_width = _copy_source_width(tokenizer)
+
+    if record.copy_value is not None:
+        source_positions = _prompt_copy_byte_targets(
+            prompt,
+            prompt_ids,
+            tokenizer,
+            record.copy_value,
+            source_width,
+        )
+        if len(copy_response_positions) % len(source_positions) != 0:
+            raise RuntimeError(
+                "response copy bytes do not align with the prompt value"
+            )
+
+        repeated_sources = source_positions * (
+            len(copy_response_positions) // len(source_positions)
+        )
+
+        for response_position, source_position in zip(
+            copy_response_positions,
+            repeated_sources,
+        ):
+            target_index = response_position - 1
+
+            if 0 <= target_index < len(copy_targets):
+                copy_targets[target_index] = source_position
+
+    padding = block_size - len(source_mask)
+    source_mask.extend([False] * padding)
+    copy_targets.extend([RESPONSE_IGNORE_INDEX] * padding)
+    supervised = sum(
+        position != RESPONSE_IGNORE_INDEX for position in copy_targets
+    )
+    return (
+        tuple(source_mask),
+        tuple(copy_targets),
+        supervised,
+        source_width,
+    )
+
+
 def encode_character_training_record(
     record: CharacterTrainingRecord,
     tokenizer: ByteBPETokenizer,
@@ -618,7 +826,15 @@ def encode_character_training_record(
                 "required character data, the newest turn, or response"
             ) from error
 
-        token_ids = tokenizer.encode(training_text)
+        prompt_ids = tokenizer.encode(prompt)
+        token_ids, copy_response_positions = (
+            _encode_copy_aware_training_text(
+                prompt=prompt,
+                training_text=training_text,
+                tokenizer=tokenizer,
+                copy_value=record.copy_value,
+            )
+        )
         excess = len(token_ids) - (block_size + 1)
 
         if excess <= 0:
@@ -660,6 +876,21 @@ def encode_character_training_record(
     )
     padding = block_size - sequence_tokens
 
+    (
+        copy_source_mask,
+        copy_targets,
+        copy_supervised_tokens,
+        copy_source_width,
+    ) = _copy_supervision(
+        record=record,
+        tokenizer=tokenizer,
+        prompt=prompt,
+        prompt_ids=prompt_ids,
+        sequence_tokens=sequence_tokens,
+        copy_response_positions=copy_response_positions,
+        block_size=block_size,
+    )
+
     input_ids.extend([0] * padding)
     target_ids.extend([RESPONSE_IGNORE_INDEX] * padding)
 
@@ -669,9 +900,13 @@ def encode_character_training_record(
         input_ids=tuple(input_ids),
         target_ids=tuple(target_ids),
         sequence_tokens=sequence_tokens,
-        prompt_tokens=len(tokenizer.encode(prompt)),
+        prompt_tokens=len(prompt_ids),
         supervised_tokens=supervised_tokens,
         dropped_turns=dropped_turns,
+        copy_source_mask=copy_source_mask,
+        copy_targets=copy_targets,
+        copy_supervised_tokens=copy_supervised_tokens,
+        copy_source_width=copy_source_width,
     )
 
 
@@ -695,7 +930,8 @@ def get_character_batch(
     examples: Iterable[EncodedCharacterExample],
     batch_size: int,
     device: str = "cpu",
-) -> tuple[torch.Tensor, torch.Tensor]:
+    include_copy: bool = False,
+) -> tuple[torch.Tensor, ...]:
     """Sample fixed-width supervised examples with replacement."""
 
     examples = tuple(examples)
@@ -714,14 +950,35 @@ def get_character_batch(
         [examples[int(index)].target_ids for index in indices],
         dtype=torch.long,
     )
-    return inputs.to(device), targets.to(device)
+    if not include_copy:
+        return inputs.to(device), targets.to(device)
+
+    source_masks = torch.tensor(
+        [examples[int(index)].copy_source_mask for index in indices],
+        dtype=torch.bool,
+    )
+    source_length = max(
+        examples[int(index)].prompt_tokens for index in indices
+    )
+    source_masks = source_masks[:, :source_length]
+    copy_targets = torch.tensor(
+        [examples[int(index)].copy_targets for index in indices],
+        dtype=torch.long,
+    )
+    return (
+        inputs.to(device),
+        targets.to(device),
+        source_masks.to(device),
+        copy_targets.to(device),
+    )
 
 
 def get_paired_character_batch(
     examples: Iterable[EncodedCharacterExample],
     batch_size: int,
     device: str = "cpu",
-) -> tuple[torch.Tensor, torch.Tensor]:
+    include_copy: bool = False,
+) -> tuple[torch.Tensor, ...]:
     """Sample complete adjacent conversation pairs with replacement.
 
     Counterfactual curricula store two examples with the same
@@ -783,7 +1040,25 @@ def get_paired_character_batch(
         [examples[index].target_ids for index in indices],
         dtype=torch.long,
     )
-    return inputs.to(device), targets.to(device)
+    if not include_copy:
+        return inputs.to(device), targets.to(device)
+
+    source_masks = torch.tensor(
+        [examples[index].copy_source_mask for index in indices],
+        dtype=torch.bool,
+    )
+    source_length = max(examples[index].prompt_tokens for index in indices)
+    source_masks = source_masks[:, :source_length]
+    copy_targets = torch.tensor(
+        [examples[index].copy_targets for index in indices],
+        dtype=torch.long,
+    )
+    return (
+        inputs.to(device),
+        targets.to(device),
+        source_masks.to(device),
+        copy_targets.to(device),
+    )
 
 
 def summarize_character_examples(
@@ -807,6 +1082,9 @@ def summarize_character_examples(
     supervised_counts = [
         example.supervised_tokens for example in examples
     ]
+    copy_counts = [
+        example.copy_supervised_tokens for example in examples
+    ]
 
     return {
         "examples": len(records),
@@ -824,6 +1102,10 @@ def summarize_character_examples(
         "sequence_tokens_mean": sum(sequence_counts) / len(examples),
         "prompt_tokens_max": max(prompt_counts),
         "supervised_tokens": sum(supervised_counts),
+        "copy_supervised_tokens": sum(copy_counts),
+        "copy_supervised_tokens_min": min(copy_counts),
+        "copy_supervised_tokens_max": max(copy_counts),
+        "copy_examples": sum(count > 0 for count in copy_counts),
         "dropped_turns": sum(
             example.dropped_turns for example in examples
         ),
@@ -839,6 +1121,7 @@ def audit_character_training_records(
     min_examples_per_tag: int = 5,
     required_tags: Iterable[str] = CHARACTER_BEHAVIOR_TAGS,
     max_dropped_turns: int | None = None,
+    require_copy_supervision: bool = False,
 ) -> dict:
     """Audit coverage and encoding quality before production training."""
 
@@ -872,6 +1155,8 @@ def audit_character_training_records(
             raise TypeError("max_dropped_turns must be an integer")
         if max_dropped_turns < 0:
             raise ValueError("max_dropped_turns cannot be negative")
+    if not isinstance(require_copy_supervision, bool):
+        raise TypeError("require_copy_supervision must be a boolean")
 
     examples = encode_character_training_records(
         records,
@@ -905,6 +1190,29 @@ def audit_character_training_records(
             f"encoding drops {summary['dropped_turns']} old turns; "
             f"maximum allowed is {max_dropped_turns}"
         )
+
+    if require_copy_supervision:
+        missing_copy_values = [
+            record.context.context_id
+            for record in records
+            if record.copy_value is None
+        ]
+        missing_copy_tokens = [
+            example.context_id
+            for example in examples
+            if example.copy_supervised_tokens < 1
+        ]
+
+        if missing_copy_values:
+            errors.append(
+                "records missing copy_value annotations: "
+                + ", ".join(missing_copy_values[:10])
+            )
+        if missing_copy_tokens:
+            errors.append(
+                "records with no aligned copy tokens: "
+                + ", ".join(missing_copy_tokens[:10])
+            )
 
     for tag in required_tags:
         count = tag_counts[tag]

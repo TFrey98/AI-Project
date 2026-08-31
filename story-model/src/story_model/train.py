@@ -492,7 +492,8 @@ def get_training_batch(
     batch_size: int,
     device: str,
     character_batch_sampling: str = "random",
-) -> tuple[torch.Tensor, torch.Tensor]:
+    copy_objective: bool = False,
+) -> tuple[torch.Tensor, ...]:
     """Dispatch to continuous-text or response-masked batching.
 
     A plain torch.Tensor means this is a flat pretraining token stream, so
@@ -516,18 +517,38 @@ def get_training_batch(
             data,
             batch_size,
             device,
+            include_copy=copy_objective,
         )
     if character_batch_sampling == "paired_conversation":
         return get_paired_character_batch(
             data,
             batch_size,
             device,
+            include_copy=copy_objective,
         )
 
     raise ValueError(
         "Unknown character batch sampling mode: "
         f"{character_batch_sampling!r}"
     )
+
+
+def forward_training_batch(
+    model: torch.nn.Module,
+    batch: tuple[torch.Tensor, ...],
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Forward either the legacy pair or pointer-copy batch."""
+
+    if len(batch) == 2:
+        return model(batch[0], batch[1])
+    if len(batch) == 4:
+        return model(
+            batch[0],
+            batch[1],
+            copy_source_mask=batch[2],
+            copy_targets=batch[3],
+        )
+    raise ValueError("training batch must contain two or four tensors")
 
 
 @torch.no_grad()
@@ -540,6 +561,7 @@ def estimate_loss(
     eval_iters: int,
     device: str,
     character_batch_sampling: str = "random",
+    copy_objective: bool = False,
 ) -> dict[str, float]:
     """Estimate train/val loss by averaging over several random batches.
 
@@ -573,15 +595,16 @@ def estimate_loss(
         losses = torch.zeros(eval_iters)
 
         for index in range(eval_iters):
-            inputs, targets = get_training_batch(
+            batch = get_training_batch(
                 data,
                 block_size,
                 batch_size,
                 device,
                 character_batch_sampling,
+                copy_objective,
             )
 
-            _, loss = model(inputs, targets)
+            _, loss = forward_training_batch(model, batch)
 
             if loss is None:
                 raise RuntimeError(
@@ -709,6 +732,7 @@ def train(
         )
 
     character_data = data_type == "character_jsonl"
+    copy_objective = bool(data_config.get("copy_objective", False))
     character_batch_sampling = data_config.get(
         "batch_sampling",
         "random",
@@ -725,6 +749,15 @@ def train(
     if not character_data and character_batch_sampling != "random":
         raise ValueError(
             "paired character sampling requires character_jsonl data"
+        )
+    if copy_objective and not character_data:
+        raise ValueError("copy objective requires character_jsonl data")
+    if copy_objective and config["model"].get("copy_mechanism") != (
+        "pointer_generator"
+    ):
+        raise ValueError(
+            "copy objective requires model.copy_mechanism="
+            "pointer_generator"
         )
     training_records = None
     validation_records = None
@@ -930,9 +963,11 @@ def train(
         config["model"],
         vocabulary_size=tokenizer.vocab_size,
         block_size=data_config["block_size"],
+        tokenizer=tokenizer,
     )
 
     expanded_parameters: tuple[str, ...] = ()
+    new_architecture_parameters: tuple[str, ...] = ()
 
     if warm_start_checkpoint is not None:
         assert source_tokenizer is not None
@@ -946,15 +981,30 @@ def train(
         # architecture that doesn't match what the source checkpoint was
         # trained with would otherwise load_model_warm_start's shape
         # checks into a confusing low-level error instead of a clear one.
+        destination_base_model = dict(config["model"])
+        destination_base_model.pop("copy_mechanism", None)
+        destination_base_model.pop("copy_loss_weight", None)
+
         if (
             saved_config is not None
-            and saved_config["model"] != config["model"]
+            and saved_config["model"] != destination_base_model
         ):
             raise ValueError(
                 "Warm-start model configuration does not match "
                 "the current configuration"
             )
 
+        pointer_prefixes = (
+            "copy_query.",
+            "copy_key.",
+            "copy_offset_embedding.",
+            "copy_gate.",
+        ) if copy_objective else ()
+        new_architecture_parameters = tuple(
+            name
+            for name in model.state_dict()
+            if name.startswith(pointer_prefixes)
+        )
         expanded_parameters = load_model_warm_start(
             model=model,
             checkpoint=warm_start_checkpoint,
@@ -962,11 +1012,15 @@ def train(
                 source_tokenizer.vocab_size
             ),
             destination_vocabulary_size=tokenizer.vocab_size,
+            allowed_new_parameter_prefixes=pointer_prefixes,
         )
 
         checkpoint_metadata["warm_start"][
             "expanded_parameters"
         ] = list(expanded_parameters)
+        checkpoint_metadata["warm_start"][
+            "new_architecture_parameters"
+        ] = list(new_architecture_parameters)
 
     model = model.to(device)
 
@@ -1129,6 +1183,11 @@ def train(
             "expanded vocabulary parameters: "
             + ", ".join(expanded_parameters)
         )
+        if new_architecture_parameters:
+            print(
+                "new architecture parameters: "
+                + ", ".join(new_architecture_parameters)
+            )
 
     if tokenizer_checkpoint is not None:
         print(f"tokenizer source: {tokenizer_path}")
@@ -1139,6 +1198,11 @@ def train(
 
     print(f"device: {device}")
     print(f"parameters: {parameter_count:,}")
+    if copy_objective:
+        print(
+            "copy source width: "
+            f"{getattr(model, 'copy_source_width')} bytes/token"
+        )
     print(f"tokenizer: {tokenizer.to_dict()['type']}")
     print(f"vocabulary: {tokenizer.vocab_size}")
     print(
@@ -1181,7 +1245,14 @@ def train(
         # positions that generate gradient (see character_training.py's
         # RESPONSE_IGNORE_INDEX masking).
         print("data type: character_jsonl")
-        print("loss objective: response_only")
+        print(
+            "loss objective: "
+            + (
+                "response_only+pointer_copy"
+                if copy_objective
+                else "response_only"
+            )
+        )
         print(
             "character batch sampling: "
             f"{character_batch_sampling}"
@@ -1204,6 +1275,15 @@ def train(
             "validation supervised response tokens: "
             f"{sum(item.supervised_tokens for item in val_data):,}"
         )
+        if copy_objective:
+            print(
+                "training supervised copy tokens: "
+                f"{sum(item.copy_supervised_tokens for item in train_data):,}"
+            )
+            print(
+                "validation supervised copy tokens: "
+                f"{sum(item.copy_supervised_tokens for item in val_data):,}"
+            )
     else:
         assert training_text is not None
         assert validation_text is not None
@@ -1295,6 +1375,7 @@ def train(
                 eval_iters=eval_iters,
                 device=device,
                 character_batch_sampling=character_batch_sampling,
+                copy_objective=copy_objective,
             )
 
             synchronize_device(device)
@@ -1381,13 +1462,15 @@ def train(
         # 2,048-token context (one full-size batch of several such
         # sequences wouldn't fit in MPS memory at once).
         for _ in range(gradient_accumulation_steps):
-            inputs, targets = get_training_batch(
+            batch = get_training_batch(
                 train_data,
                 block_size,
                 batch_size,
                 device,
                 character_batch_sampling,
+                copy_objective,
             )
+            inputs, targets = batch[:2]
 
             # Counts unmasked (non-RESPONSE_IGNORE_INDEX) target positions
             # in this microbatch — used just below to weight each
@@ -1399,9 +1482,7 @@ def train(
                 targets != RESPONSE_IGNORE_INDEX
             ).sum()
 
-            microbatches.append(
-                (inputs, targets, supervised_tokens)
-            )
+            microbatches.append((batch, supervised_tokens))
             total_supervised_tokens = (
                 supervised_tokens
                 if total_supervised_tokens is None
@@ -1411,8 +1492,8 @@ def train(
 
         assert total_supervised_tokens is not None
 
-        for inputs, targets, supervised_tokens in microbatches:
-            _, loss = model(inputs, targets)
+        for batch, supervised_tokens in microbatches:
+            _, loss = forward_training_batch(model, batch)
 
             if loss is None:
                 raise RuntimeError(
@@ -1539,6 +1620,7 @@ def train(
         eval_iters=eval_iters,
         device=device,
         character_batch_sampling=character_batch_sampling,
+        copy_objective=copy_objective,
     )
 
     final_path = (

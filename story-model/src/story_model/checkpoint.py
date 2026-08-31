@@ -204,6 +204,7 @@ def load_model_warm_start(
     checkpoint: dict[str, Any],
     source_vocabulary_size: int,
     destination_vocabulary_size: int,
+    allowed_new_parameter_prefixes: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Load model weights while retaining new vocabulary rows.
 
@@ -245,8 +246,18 @@ def load_model_warm_start(
     source_keys = set(source_state)
     destination_keys = set(destination_state)
 
-    if source_keys != destination_keys:
-        missing = sorted(destination_keys - source_keys)
+    new_destination_keys = destination_keys - source_keys
+    permitted_new_keys = {
+        name
+        for name in new_destination_keys
+        if name.startswith(allowed_new_parameter_prefixes)
+    }
+
+    if (
+        source_keys - destination_keys
+        or new_destination_keys != permitted_new_keys
+    ):
+        missing = sorted(new_destination_keys - permitted_new_keys)
         unexpected = sorted(source_keys - destination_keys)
         raise ValueError(
             "warm-start model parameters do not match: "
@@ -257,6 +268,10 @@ def load_model_warm_start(
     expanded_parameters = []
 
     for name, destination_tensor in destination_state.items():
+        if name in permitted_new_keys:
+            adapted_state[name] = destination_tensor
+            continue
+
         source_tensor = source_state[name]
 
         if source_tensor.shape == destination_tensor.shape:

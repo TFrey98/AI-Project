@@ -160,6 +160,10 @@ def generate_tokens(
         )
 
     tokens = starting_tokens
+    copy_enabled = getattr(model, "copy_mechanism", "none") == (
+        "pointer_generator"
+    )
+    copy_source_mask = torch.ones_like(tokens, dtype=torch.bool)
 
     for _ in range(max_new_tokens):
         # Every Transformer here has a fixed maximum context length
@@ -172,7 +176,14 @@ def generate_tokens(
         # compressed summary of arbitrarily long history instead).
         visible_tokens = tokens[:, -block_size:]
 
-        logits, _ = model(visible_tokens)
+        logits, _ = (
+            model(
+                visible_tokens,
+                copy_source_mask=copy_source_mask[:, -block_size:],
+            )
+            if copy_enabled
+            else model(visible_tokens)
+        )
 
         # Only the LAST position's prediction is "what comes next" — every
         # earlier position's prediction in this same forward pass was
@@ -189,6 +200,13 @@ def generate_tokens(
 
         tokens = torch.cat(
             (tokens, next_token),
+            dim=1,
+        )
+        copy_source_mask = torch.cat(
+            (
+                copy_source_mask,
+                torch.zeros_like(next_token, dtype=torch.bool),
+            ),
             dim=1,
         )
 

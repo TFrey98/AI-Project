@@ -162,7 +162,19 @@ def evaluate_character_records(
             dtype=torch.long,
             device=device,
         )
-        _, loss = model(inputs, targets)
+        if getattr(model, "copy_mechanism", "none") == "pointer_generator":
+            copy_source_mask = torch.tensor(
+                [example.copy_source_mask[: example.prompt_tokens]],
+                dtype=torch.bool,
+                device=device,
+            )
+            _, loss = model(
+                inputs,
+                targets,
+                copy_source_mask=copy_source_mask,
+            )
+        else:
+            _, loss = model(inputs, targets)
 
         if loss is None or not torch.isfinite(loss).item():
             raise RuntimeError(

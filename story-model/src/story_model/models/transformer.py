@@ -667,6 +667,9 @@ class TransformerLanguageModel(nn.Module):
         position_encoding: str = "learned",
         normalization: str = "layernorm",
         feed_forward_activation: str = "gelu",
+        copy_mechanism: str = "none",
+        copy_loss_weight: float = 0.0,
+        copy_token_bytes: tuple[tuple[int, ...], ...] | None = None,
     ) -> None:
         super().__init__()
 
@@ -687,10 +690,22 @@ class TransformerLanguageModel(nn.Module):
             raise ValueError(
                 "feed_forward_activation must be 'gelu' or 'swiglu'"
             )
+        if copy_mechanism not in {"none", "pointer_generator"}:
+            raise ValueError(
+                "copy_mechanism must be 'none' or 'pointer_generator'"
+            )
+        if copy_loss_weight < 0.0:
+            raise ValueError("copy_loss_weight cannot be negative")
+        if copy_mechanism == "none" and copy_loss_weight != 0.0:
+            raise ValueError(
+                "copy_loss_weight requires pointer_generator"
+            )
 
         self.block_size = block_size
         self.position_encoding = position_encoding
         self.feed_forward_activation = feed_forward_activation
+        self.copy_mechanism = copy_mechanism
+        self.copy_loss_weight = float(copy_loss_weight)
 
         # token_embeddings turns each token id into a learned vector — the
         # model's "vocabulary" of meaning, before any context is applied.
@@ -753,6 +768,86 @@ class TransformerLanguageModel(nn.Module):
             vocabulary_size,
         )
 
+        if copy_mechanism == "pointer_generator":
+            if copy_token_bytes is None:
+                if vocabulary_size > 256:
+                    raise ValueError(
+                        "pointer_generator requires tokenizer byte mappings"
+                    )
+                copy_token_bytes = tuple(
+                    (token_id,) for token_id in range(vocabulary_size)
+                )
+            if len(copy_token_bytes) != vocabulary_size:
+                raise ValueError(
+                    "copy_token_bytes must cover the complete vocabulary"
+                )
+            if any(
+                not 0 <= byte_id < min(256, vocabulary_size)
+                for token_bytes in copy_token_bytes
+                for byte_id in token_bytes
+            ):
+                raise ValueError(
+                    "copy_token_bytes may contain only raw byte token ids"
+                )
+
+            source_width = max(
+                (len(value) for value in copy_token_bytes),
+                default=1,
+            )
+            self.copy_source_width = max(1, source_width)
+            byte_ids = torch.zeros(
+                vocabulary_size,
+                self.copy_source_width,
+                dtype=torch.long,
+            )
+            byte_mask = torch.zeros(
+                vocabulary_size,
+                self.copy_source_width,
+                dtype=torch.bool,
+            )
+
+            for token_id, token_bytes in enumerate(copy_token_bytes):
+                if token_bytes:
+                    width = len(token_bytes)
+                    byte_ids[token_id, :width] = torch.tensor(token_bytes)
+                    byte_mask[token_id, :width] = True
+
+            self.register_buffer(
+                "copy_token_byte_ids", byte_ids, persistent=False
+            )
+            self.register_buffer(
+                "copy_token_byte_mask", byte_mask, persistent=False
+            )
+            self.copy_query = nn.Linear(
+                embedding_dim, embedding_dim, bias=False
+            )
+            self.copy_key = nn.Linear(
+                embedding_dim, embedding_dim, bias=False
+            )
+            self.copy_offset_embedding = nn.Embedding(
+                self.copy_source_width,
+                embedding_dim,
+            )
+            self.copy_gate = nn.Linear(embedding_dim, 1)
+            self.register_buffer(
+                "copy_causal_mask",
+                torch.tril(
+                    torch.ones(block_size, block_size, dtype=torch.bool)
+                ),
+                persistent=False,
+            )
+        else:
+            self.copy_source_width = 1
+            self.copy_token_byte_ids = None
+            self.copy_token_byte_mask = None
+            self.copy_query = None
+            self.copy_key = None
+            self.copy_offset_embedding = None
+            self.copy_gate = None
+            self.copy_causal_mask = None
+
+        self.last_loss_components: dict[str, float] = {}
+
         self.apply(self._initialize_weights)
 
         if position_encoding == "rope":
@@ -788,6 +883,8 @@ class TransformerLanguageModel(nn.Module):
         self,
         tokens: torch.Tensor,
         targets: torch.Tensor | None = None,
+        copy_source_mask: torch.Tensor | None = None,
+        copy_targets: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         batch, sequence = tokens.shape
 
@@ -817,9 +914,108 @@ class TransformerLanguageModel(nn.Module):
         for block in self.blocks:
             x = block(x)
 
-        logits = self.output_projection(
-            self.final_norm(x)
-        )
+        hidden = self.final_norm(x)
+        vocabulary_logits = self.output_projection(hidden)
+        logits = vocabulary_logits
+        pointer_logits = None
+        gate_logits = None
+        source_sequence = sequence
+
+        if self.copy_mechanism == "pointer_generator":
+            if copy_source_mask is None and targets is not None:
+                copy_source_mask = targets == -100
+
+            if copy_source_mask is not None:
+                if (
+                    copy_source_mask.ndim != 2
+                    or copy_source_mask.shape[0] != batch
+                    or not 1 <= copy_source_mask.shape[1] <= sequence
+                ):
+                    raise ValueError(
+                        "copy_source_mask must have shape "
+                        "(batch, source_sequence) with source_sequence no "
+                        "larger than the token sequence"
+                    )
+
+                assert self.copy_query is not None
+                assert self.copy_key is not None
+                assert self.copy_offset_embedding is not None
+                assert self.copy_gate is not None
+                assert self.copy_causal_mask is not None
+                assert self.copy_token_byte_ids is not None
+                assert self.copy_token_byte_mask is not None
+                source_sequence = copy_source_mask.shape[1]
+                source_tokens = tokens[:, :source_sequence]
+                source_hidden = hidden[:, :source_sequence]
+                source_byte_ids = self.copy_token_byte_ids[source_tokens]
+                source_byte_mask = self.copy_token_byte_mask[source_tokens]
+                source_keys = self.copy_key(source_hidden).unsqueeze(-2)
+                source_keys = source_keys + self.token_embeddings(
+                    source_byte_ids
+                )
+                offsets = torch.arange(
+                    self.copy_source_width,
+                    device=tokens.device,
+                )
+                source_keys = source_keys + self.copy_offset_embedding(
+                    offsets
+                )[None, None, :, :]
+                pointer_logits = torch.einsum(
+                    "btd,bswd->btsw",
+                    self.copy_query(hidden),
+                    source_keys,
+                ).flatten(-2)
+                pointer_logits = pointer_logits * (
+                    hidden.shape[-1] ** -0.5
+                )
+                allowed_sources = (
+                    copy_source_mask[:, None, :, None].bool()
+                    & self.copy_causal_mask[
+                        None, :sequence, :source_sequence, None
+                    ]
+                    & source_byte_mask[:, None, :, :]
+                ).flatten(-2)
+                has_source = allowed_sources.any(dim=-1, keepdim=True)
+                safe_logits = pointer_logits.masked_fill(
+                    ~allowed_sources,
+                    float("-inf"),
+                )
+                safe_logits = torch.where(
+                    has_source,
+                    safe_logits,
+                    torch.zeros_like(safe_logits),
+                )
+                pointer_logits = safe_logits
+                pointer_probabilities = F.softmax(
+                    safe_logits,
+                    dim=-1,
+                ).masked_fill(~allowed_sources, 0.0)
+                copy_probabilities = torch.zeros_like(vocabulary_logits)
+                output_ids = source_byte_ids.flatten(1)[:, None, :].expand(
+                    batch,
+                    sequence,
+                    source_sequence * self.copy_source_width,
+                )
+                copy_probabilities.scatter_add_(
+                    dim=-1,
+                    index=output_ids,
+                    src=pointer_probabilities,
+                )
+                gate_logits = self.copy_gate(hidden)
+                generate_probability = torch.sigmoid(gate_logits)
+                generate_probability = torch.where(
+                    has_source,
+                    generate_probability,
+                    torch.ones_like(generate_probability),
+                )
+                final_probabilities = (
+                    generate_probability * F.softmax(
+                        vocabulary_logits,
+                        dim=-1,
+                    )
+                    + (1.0 - generate_probability) * copy_probabilities
+                )
+                logits = final_probabilities.clamp_min(1e-12).log()
 
         loss = None
 
@@ -834,7 +1030,7 @@ class TransformerLanguageModel(nn.Module):
             # independent predictions, since cross_entropy scores each
             # prediction independently regardless of which sequence or
             # position it came from.
-            loss = F.cross_entropy(
+            language_loss = F.cross_entropy(
                 logits.reshape(
                     batch * sequence,
                     vocabulary,
@@ -844,6 +1040,65 @@ class TransformerLanguageModel(nn.Module):
                 # positions so only the target response contributes loss.
                 ignore_index=-100,
             )
+            loss = language_loss
+            self.last_loss_components = {
+                "language": float(language_loss.detach()),
+                "pointer": 0.0,
+                "gate": 0.0,
+            }
+
+            if (
+                self.copy_mechanism == "pointer_generator"
+                and copy_targets is not None
+            ):
+                if copy_targets.shape != targets.shape:
+                    raise ValueError("copy_targets must match targets shape")
+                if pointer_logits is None or gate_logits is None:
+                    raise ValueError(
+                        "copy_targets require copy_source_mask"
+                    )
+
+                valid_copy = copy_targets != -100
+                auxiliary_loss = torch.zeros(
+                    (), device=logits.device, dtype=logits.dtype
+                )
+
+                if valid_copy.any():
+                    if copy_targets[valid_copy].max() >= (
+                        source_sequence * self.copy_source_width
+                    ):
+                        raise ValueError(
+                            "copy target is outside the supplied source"
+                        )
+                    pointer_loss = F.cross_entropy(
+                        pointer_logits.reshape(
+                            batch * sequence,
+                            source_sequence * self.copy_source_width,
+                        ),
+                        copy_targets.reshape(batch * sequence),
+                        ignore_index=-100,
+                    )
+                    auxiliary_loss = auxiliary_loss + pointer_loss
+                    self.last_loss_components["pointer"] = float(
+                        pointer_loss.detach()
+                    )
+
+                supervised = targets != -100
+
+                if supervised.any():
+                    gate_target = (~valid_copy).to(gate_logits.dtype)
+                    gate_loss = F.binary_cross_entropy_with_logits(
+                        gate_logits.squeeze(-1)[supervised],
+                        gate_target[supervised],
+                    )
+                    auxiliary_loss = auxiliary_loss + gate_loss
+                    self.last_loss_components["gate"] = float(
+                        gate_loss.detach()
+                    )
+
+                loss = language_loss + (
+                    self.copy_loss_weight * auxiliary_loss
+                )
 
         return logits, loss
 
@@ -863,6 +1118,8 @@ class TransformerLanguageModel(nn.Module):
         quick manual testing and for the unit tests in test_transformer.py.
         """
 
+        copy_source_mask = torch.ones_like(tokens, dtype=torch.bool)
+
         for _ in range(max_new_tokens):
             # A Transformer has no memory between calls — every step
             # re-runs the full forward pass over all currently visible
@@ -876,7 +1133,14 @@ class TransformerLanguageModel(nn.Module):
                 -self.block_size :,
             ]
 
-            logits, _ = self(visible_tokens)
+            logits, _ = self(
+                visible_tokens,
+                copy_source_mask=(
+                    copy_source_mask[:, -self.block_size :]
+                    if self.copy_mechanism == "pointer_generator"
+                    else None
+                ),
+            )
 
             # Only the prediction at the LAST position is a genuine
             # "what comes next" forecast — every earlier position's
@@ -900,6 +1164,13 @@ class TransformerLanguageModel(nn.Module):
 
             tokens = torch.cat(
                 (tokens, next_token),
+                dim=1,
+            )
+            copy_source_mask = torch.cat(
+                (
+                    copy_source_mask,
+                    torch.zeros_like(next_token, dtype=torch.bool),
+                ),
                 dim=1,
             )
 
