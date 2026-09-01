@@ -1,10 +1,11 @@
-"""Continue Phase 32 with evidence-conditioned resolve/clarify routing."""
+"""Train support-constrained unified resolve/clarify routing."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import math
+from collections import defaultdict
 from pathlib import Path
 
 import torch
@@ -24,6 +25,7 @@ from story_model.train import learning_rate_for_step, set_learning_rate
 from story_model.unified_typed_span_resolver import (
     MODE_TO_INDEX,
     NO_SUPPORT_OPTION_INDEX,
+    SUPPORT_MASK_VERSION,
     STRUCTURED_MODE,
     UnifiedTypedSpanResolver,
     encode_unified_records,
@@ -67,28 +69,86 @@ def _balanced_training_batch(
     return unified_batch(combined, indices, device)
 
 
+def _stratified_indices(records, examples_per_cell: int) -> tuple[int, ...]:
+    """Choose a fixed panel covering each skill/action/case/width cell."""
+
+    if examples_per_cell < 1:
+        raise ValueError("eval_examples_per_cell must be positive")
+    groups = defaultdict(list)
+    for index, record in enumerate(records):
+        key = (
+            record.skill,
+            record.expected_action,
+            record.case,
+            len(record.candidates),
+        )
+        groups[key].append(index)
+    selected = []
+    for key in sorted(groups):
+        indices = groups[key]
+        count = min(examples_per_cell, len(indices))
+        if count == 1:
+            selected.append(indices[0])
+            continue
+        selected.extend(
+            indices[round(position * (len(indices) - 1) / (count - 1))]
+            for position in range(count)
+        )
+    return tuple(sorted(selected))
+
+
 @torch.no_grad()
-def _evaluate(model, examples, records, batch_size, batches, device) -> dict[str, float]:
+def _evaluate(
+    model,
+    examples,
+    records,
+    indices,
+    batch_size,
+    device,
+) -> dict[str, float]:
     model.eval()
-    loss = 0.0
+    mode_loss_sum = 0.0
+    mode_loss_total = 0
+    option_loss_sum = 0.0
+    option_loss_total = 0
+    raw_candidate_loss_sum = 0.0
+    raw_candidate_loss_total = 0
     mode_correct = 0
     structured_correct = 0
     structured_total = 0
     resolve_option_correct = 0
+    raw_candidate_correct = 0
     resolve_total = 0
     clarify_sentinel_correct = 0
     clarify_total = 0
     total = 0
-    for _ in range(batches):
-        indices = torch.randint(0, len(examples), (batch_size,)).tolist()
-        batch = unified_batch(examples, indices, device)
-        output = model(*batch[:5], batch[5], batch[6])
+    for start in range(0, len(indices), batch_size):
+        batch_indices = indices[start : start + batch_size]
+        batch = unified_batch(examples, batch_indices, device)
+        output = model(*batch[:5], batch[5], batch[6], batch[7])
         assert output.loss is not None
-        loss += float(output.loss)
+        if output.mode_loss is not None:
+            mode_loss_sum += float(output.mode_loss) * len(batch_indices)
+            mode_loss_total += len(batch_indices)
+        structured = batch[6] != -100
+        structured_count = int(structured.sum())
+        if output.option_loss is not None:
+            option_loss_sum += float(output.option_loss) * structured_count
+            option_loss_total += structured_count
         modes = output.mode_logits.argmax(dim=-1)
         options = output.option_logits.argmax(dim=-1)
+        candidate_positions = torch.arange(
+            NO_SUPPORT_OPTION_INDEX, device=device
+        ).unsqueeze(0)
+        inventory_valid = candidate_positions < batch[7].unsqueeze(1)
+        raw_candidate_logits = output.raw_option_logits[
+            :, :NO_SUPPORT_OPTION_INDEX
+        ].masked_fill(
+            ~inventory_valid,
+            torch.finfo(output.raw_option_logits.dtype).min,
+        )
+        raw_candidates = raw_candidate_logits.argmax(dim=-1)
         mode_correct += int((modes == batch[5]).sum())
-        structured = batch[6] != -100
         structured_total += int(structured.sum())
         structured_correct += int(
             (
@@ -98,21 +158,38 @@ def _evaluate(model, examples, records, batch_size, batches, device) -> dict[str
             ).sum()
         )
         resolve = torch.tensor(
-            [records[index].expected_action == RESOLVE_ACTION for index in indices],
+            [
+                records[index].expected_action == RESOLVE_ACTION
+                for index in batch_indices
+            ],
             dtype=torch.bool,
             device=device,
         )
         clarify = structured & ~resolve
         resolve_total += int(resolve.sum())
+        resolve_count = int(resolve.sum())
+        if output.raw_candidate_loss is not None:
+            raw_candidate_loss_sum += (
+                float(output.raw_candidate_loss) * resolve_count
+            )
+            raw_candidate_loss_total += resolve_count
         clarify_total += int(clarify.sum())
         resolve_option_correct += int((resolve & (options == batch[6])).sum())
+        raw_candidate_correct += int(
+            (resolve & (raw_candidates == batch[6])).sum()
+        )
         clarify_sentinel_correct += int(
             (clarify & (options == NO_SUPPORT_OPTION_INDEX)).sum()
         )
-        total += batch_size
+        total += len(batch_indices)
     model.train()
+    loss = mode_loss_sum / mode_loss_total
+    if option_loss_total:
+        loss += option_loss_sum / option_loss_total
+    if raw_candidate_loss_total:
+        loss += raw_candidate_loss_sum / raw_candidate_loss_total
     return {
-        "loss": loss / batches,
+        "loss": loss,
         "mode_accuracy": mode_correct / total,
         "structured_accuracy": (
             structured_correct / structured_total if structured_total else 0.0
@@ -120,10 +197,71 @@ def _evaluate(model, examples, records, batch_size, batches, device) -> dict[str
         "resolve_option_accuracy": (
             resolve_option_correct / resolve_total if resolve_total else 0.0
         ),
+        "raw_candidate_top1_accuracy": (
+            raw_candidate_correct / resolve_total if resolve_total else 0.0
+        ),
         "clarify_sentinel_accuracy": (
             clarify_sentinel_correct / clarify_total if clarify_total else 0.0
         ),
     }
+
+
+def _checkpoint_selection(
+    phase31_metrics: dict[str, float],
+    balanced_validation_loss: float,
+    structured_floor: float,
+    resolve_option_floor: float,
+    sentinel_floor: float,
+    mode_floor: float,
+) -> tuple[bool, tuple[float, ...]]:
+    """Rank eligible checkpoints by loss and reject Phase 31 regressions."""
+
+    eligible = (
+        phase31_metrics["structured_accuracy"] >= structured_floor
+        and phase31_metrics["resolve_option_accuracy"] >= resolve_option_floor
+        and phase31_metrics["raw_candidate_top1_accuracy"]
+        >= resolve_option_floor
+        and phase31_metrics["clarify_sentinel_accuracy"] >= sentinel_floor
+        and phase31_metrics["mode_accuracy"] >= mode_floor
+    )
+    if eligible:
+        key = (
+            1.0,
+            -balanced_validation_loss,
+            phase31_metrics["structured_accuracy"],
+            phase31_metrics["resolve_option_accuracy"],
+            phase31_metrics["raw_candidate_top1_accuracy"],
+            phase31_metrics["clarify_sentinel_accuracy"],
+            phase31_metrics["mode_accuracy"],
+        )
+    else:
+        key = (
+            0.0,
+            phase31_metrics["structured_accuracy"],
+            phase31_metrics["resolve_option_accuracy"],
+            phase31_metrics["raw_candidate_top1_accuracy"],
+            phase31_metrics["clarify_sentinel_accuracy"],
+            phase31_metrics["mode_accuracy"],
+            -balanced_validation_loss,
+        )
+    return eligible, key
+
+
+def _checkpoint_slot(
+    eligible: bool,
+    selection_key: tuple[float, ...],
+    best_key: tuple[float, ...] | None,
+    diagnostic_key: tuple[float, ...] | None,
+) -> str | None:
+    """Keep eligible and diagnostic checkpoints in distinct slots."""
+
+    if eligible:
+        return "best" if best_key is None or selection_key > best_key else None
+    return (
+        "diagnostic"
+        if diagnostic_key is None or selection_key > diagnostic_key
+        else None
+    )
 
 
 def main() -> None:
@@ -195,8 +333,31 @@ def main() -> None:
     warmup_steps = int(train_config.get("warmup_steps", 0))
     accumulation = int(train_config.get("gradient_accumulation_steps", 1))
     batch_size = int(data_config["batch_size"])
+    eval_batch_size = int(data_config.get("eval_batch_size", batch_size))
     eval_interval = int(train_config.get("eval_interval", 50))
-    eval_batches = int(train_config.get("eval_batches", 20))
+    eval_examples_per_cell = int(
+        train_config.get("eval_examples_per_cell", 4)
+    )
+    phase31_structured_floor = float(
+        train_config.get("phase31_structured_floor", 0.95)
+    )
+    phase31_resolve_option_floor = float(
+        train_config.get("phase31_resolve_option_floor", 0.995)
+    )
+    phase31_sentinel_floor = float(
+        train_config.get("phase31_sentinel_floor", 0.95)
+    )
+    phase31_mode_floor = float(train_config.get("phase31_mode_floor", 0.98))
+    if eval_batch_size < 1:
+        raise ValueError("eval_batch_size must be positive")
+    for name, value in (
+        ("phase31_structured_floor", phase31_structured_floor),
+        ("phase31_resolve_option_floor", phase31_resolve_option_floor),
+        ("phase31_sentinel_floor", phase31_sentinel_floor),
+        ("phase31_mode_floor", phase31_mode_floor),
+    ):
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be between zero and one")
     log_interval = int(train_config.get("log_interval", 25))
     clip = float(train_config.get("gradient_clip", 1.0))
     patience_value = train_config.get("early_stopping_patience")
@@ -205,12 +366,22 @@ def main() -> None:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "architecture": "unified_typed_span_resolver",
+        "support_mask_version": SUPPORT_MASK_VERSION,
         "config": config,
         "tokenizer": tokenizer.to_dict(),
         "manifest": combined_manifest,
         "parent_phase32_checkpoint": str(args.warm_start),
         **training_fingerprints(tokenizer.to_dict(), combined_manifest),
     }
+    train_eval_indices = _stratified_indices(
+        train_records, eval_examples_per_cell
+    )
+    phase31_val_indices = _stratified_indices(
+        phase31_val, eval_examples_per_cell
+    )
+    phase32_val_indices = _stratified_indices(
+        phase32_val, eval_examples_per_cell
+    )
 
     print(f"startup: device {device}")
     print(f"startup: loading Phase 32 resolver {args.warm_start}")
@@ -219,7 +390,10 @@ def main() -> None:
     print("structured options: up to 4 real candidates + no-support sentinel")
     print(f"parameters: {sum(parameter.numel() for parameter in model.parameters()):,}")
     print(f"vocabulary: {tokenizer.vocab_size}")
-    print("loss objective: generate_mode+unified_structured_option")
+    print(
+        "loss objective: generate_mode+support_masked_option"
+        "+raw_candidate_ranking"
+    )
     print(
         f"training examples: {len(train_examples):,} "
         f"(Phase 31 {len(phase31_train):,} + Phase 32 {len(phase32_train):,})"
@@ -228,30 +402,56 @@ def main() -> None:
         f"validation examples: {len(phase31_val_examples) + len(phase32_val_examples):,} "
         f"(Phase 31 {len(phase31_val):,} + Phase 32 {len(phase32_val):,})"
     )
+    print(
+        "fixed validation panels: "
+        f"train {len(train_eval_indices):,}, "
+        f"Phase 31 {len(phase31_val_indices):,}, "
+        f"Phase 32 {len(phase32_val_indices):,}; "
+        f"eval batch size {eval_batch_size}"
+    )
+    print(
+        "Phase 31 checkpoint floors: "
+        f"structured {phase31_structured_floor:.3f}, "
+        f"resolve option {phase31_resolve_option_floor:.3f}, "
+        f"sentinel {phase31_sentinel_floor:.3f}, "
+        f"mode {phase31_mode_floor:.3f}"
+    )
 
     best_loss: float | None = None
-    best_step = 0
+    best_step: int | None = None
+    best_selection_key = None
+    diagnostic_loss: float | None = None
+    diagnostic_step: int | None = None
+    diagnostic_selection_key = None
+    last_eligible = False
     without_improvement = 0
 
     def evaluate_and_save(step: int) -> bool:
-        nonlocal best_loss, best_step, without_improvement
+        nonlocal best_loss, best_step, best_selection_key
+        nonlocal diagnostic_loss, diagnostic_step, diagnostic_selection_key
+        nonlocal last_eligible, without_improvement
         train_metrics = _evaluate(
-            model, train_examples, train_records, batch_size, eval_batches, device
+            model,
+            train_examples,
+            train_records,
+            train_eval_indices,
+            eval_batch_size,
+            device,
         )
         phase31_metrics = _evaluate(
             model,
             phase31_val_examples,
             phase31_val,
-            batch_size,
-            eval_batches,
+            phase31_val_indices,
+            eval_batch_size,
             device,
         )
         phase32_metrics = _evaluate(
             model,
             phase32_val_examples,
             phase32_val,
-            batch_size,
-            eval_batches,
+            phase32_val_indices,
+            eval_batch_size,
             device,
         )
         balanced_validation_loss = (
@@ -265,13 +465,35 @@ def main() -> None:
             f"train structured {train_metrics['structured_accuracy']:.3f}, "
             f"Phase 31 structured {phase31_metrics['structured_accuracy']:.3f}, "
             f"Phase 32 structured {phase32_metrics['structured_accuracy']:.3f}, "
+            f"Phase 31 option {phase31_metrics['resolve_option_accuracy']:.3f}, "
+            "Phase 31 raw candidate "
+            f"{phase31_metrics['raw_candidate_top1_accuracy']:.3f}, "
+            f"Phase 31 sentinel {phase31_metrics['clarify_sentinel_accuracy']:.3f}, "
+            f"Phase 31 mode {phase31_metrics['mode_accuracy']:.3f}, "
             f"Phase 32 sentinel {phase32_metrics['clarify_sentinel_accuracy']:.3f}"
         )
-        if math.isfinite(balanced_validation_loss) and (
-            best_loss is None or balanced_validation_loss < best_loss
-        ):
+        eligible, selection_key = _checkpoint_selection(
+            phase31_metrics,
+            balanced_validation_loss,
+            phase31_structured_floor,
+            phase31_resolve_option_floor,
+            phase31_sentinel_floor,
+            phase31_mode_floor,
+        )
+        print(f"checkpoint eligible: {'yes' if eligible else 'no'}")
+        last_eligible = eligible
+        slot = None
+        if math.isfinite(balanced_validation_loss):
+            slot = _checkpoint_slot(
+                eligible,
+                selection_key,
+                best_selection_key,
+                diagnostic_selection_key,
+            )
+        if slot == "best":
             best_loss = balanced_validation_loss
             best_step = step
+            best_selection_key = selection_key
             without_improvement = 0
             save_checkpoint(
                 checkpoint_dir / "best.pt",
@@ -282,11 +504,35 @@ def main() -> None:
                     **metadata,
                     "best_validation_loss": best_loss,
                     "best_step": best_step,
+                    "checkpoint_eligible": True,
                 },
             )
-            print(f"new best: balanced val loss {best_loss:.4f} at update {step}")
+            print(
+                f"new best: balanced val loss {best_loss:.4f} "
+                f"at update {step}; eligible=True"
+            )
         else:
             without_improvement += 1
+            if slot == "diagnostic":
+                diagnostic_loss = balanced_validation_loss
+                diagnostic_step = step
+                diagnostic_selection_key = selection_key
+                save_checkpoint(
+                    checkpoint_dir / "diagnostic-ineligible.pt",
+                    model,
+                    optimizer,
+                    step,
+                    extra={
+                        **metadata,
+                        "diagnostic_validation_loss": diagnostic_loss,
+                        "diagnostic_step": diagnostic_step,
+                        "checkpoint_eligible": False,
+                    },
+                )
+                print(
+                    "new diagnostic-ineligible: balanced val loss "
+                    f"{diagnostic_loss:.4f} at update {step}"
+                )
         return patience is not None and without_improvement >= patience
 
     evaluate_and_save(0)
@@ -309,7 +555,7 @@ def main() -> None:
                 batch_size,
                 device,
             )
-            output = model(*batch[:5], batch[5], batch[6])
+            output = model(*batch[:5], batch[5], batch[6], batch[7])
             assert output.loss is not None
             accumulated_loss += float(output.loss.detach())
             (output.loss / accumulation).backward()
@@ -335,10 +581,27 @@ def main() -> None:
             **metadata,
             "best_validation_loss": best_loss,
             "best_step": best_step,
+            "best_checkpoint_eligible": best_step is not None,
+            "checkpoint_eligible": last_eligible,
         },
     )
-    print(f"best: balanced val loss {best_loss:.4f} at update {best_step}")
-    print(f"best checkpoint: {checkpoint_dir / 'best.pt'}")
+    if best_loss is None:
+        print("best eligible checkpoint: none")
+    else:
+        print(
+            f"best eligible: balanced val loss {best_loss:.4f} "
+            f"at update {best_step}"
+        )
+        print(f"best checkpoint: {checkpoint_dir / 'best.pt'}")
+    if diagnostic_loss is not None:
+        print(
+            "diagnostic ineligible: balanced val loss "
+            f"{diagnostic_loss:.4f} at update {diagnostic_step}"
+        )
+        print(
+            "diagnostic checkpoint: "
+            f"{checkpoint_dir / 'diagnostic-ineligible.pt'}"
+        )
     print(f"checkpoint: {checkpoint_dir / 'final.pt'}")
 
 

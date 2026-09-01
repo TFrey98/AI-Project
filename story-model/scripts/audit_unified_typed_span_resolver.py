@@ -82,8 +82,25 @@ def main() -> None:
                     raise ValueError(f"unknown action: {record.expected_action}")
                 if unified.option_target != expected_target:
                     raise ValueError(f"wrong option target: {record.record_id}")
+                supported = tuple(
+                    index
+                    for index, valid in enumerate(
+                        unified.option_valid_mask[:MAX_CANDIDATES]
+                    )
+                    if valid
+                )
+                if record.expected_action == RESOLVE_ACTION:
+                    expected_supported = (record.selected_candidate_index,)
+                else:
+                    expected_supported = ()
+                if supported != expected_supported:
+                    raise ValueError(
+                        f"wrong supported candidates: {record.record_id}; "
+                        f"expected={expected_supported}, actual={supported}"
+                    )
                 sentinel_valid = unified.option_valid_mask[NO_SUPPORT_OPTION_INDEX]
-                if sentinel_valid != (record.expected_type is not None):
+                expected_sentinel = record.expected_action == CLARIFY_ACTION
+                if sentinel_valid != expected_sentinel:
                     raise ValueError(f"wrong sentinel mask: {record.record_id}")
                 total += 1
                 actions[record.expected_action] += 1
@@ -96,6 +113,7 @@ def main() -> None:
     print(f"actions: {dict(sorted(actions.items()))}")
     print(f"maximum shared tokens: {maximum_shared:,}/{block_size:,}")
     print(f"maximum option-view tokens: {maximum_option:,}/{block_size:,}")
+    print("support masks: exactly one selected span or no-support sentinel")
     print("Phase 32 shared and real-candidate encodings preserved exactly")
 
 

@@ -1,4 +1,4 @@
-"""Evaluate Phase 33 and re-run the complete Phase 31/32 regression gate."""
+"""Evaluate Phase 33b and re-run the complete Phase 31/32 regression gate."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from story_model.unified_typed_span_resolver import (
     GENERATE_MODE,
     MODE_TO_INDEX,
     NO_SUPPORT_OPTION_INDEX,
+    SUPPORT_MASK_VERSION,
     STRUCTURED_MODE,
     UnifiedTypedSpanResolver,
     encode_unified_records,
@@ -41,6 +42,8 @@ def _load_model(path: Path, device: torch.device):
     extra = checkpoint.get("extra", {})
     if extra.get("architecture") != "unified_typed_span_resolver":
         raise ValueError("checkpoint is not a Phase 33 unified resolver")
+    if extra.get("support_mask_version") != SUPPORT_MASK_VERSION:
+        raise ValueError("checkpoint predates the Phase 33b support mask")
     config = extra.get("config")
     if not isinstance(config, dict):
         raise ValueError("checkpoint has no training config")
@@ -76,8 +79,18 @@ def evaluate_records(
         output = model(*batch[:5])
         mode_predictions = output.mode_logits.argmax(dim=-1).tolist()
         option_predictions = output.option_logits.argmax(dim=-1).tolist()
+        candidate_positions = torch.arange(
+            MAX_CANDIDATES, device=device
+        ).unsqueeze(0)
+        inventory_valid = candidate_positions < batch[7].unsqueeze(1)
         real_candidate_predictions = (
-            output.option_logits[:, :MAX_CANDIDATES].argmax(dim=-1).tolist()
+            output.raw_option_logits[:, :MAX_CANDIDATES]
+            .masked_fill(
+                ~inventory_valid,
+                torch.finfo(output.raw_option_logits.dtype).min,
+            )
+            .argmax(dim=-1)
+            .tolist()
         )
         legacy_predictions = output.legacy_action_logits.argmax(dim=-1).tolist()
         for offset, index in enumerate(indices):
@@ -146,6 +159,13 @@ def evaluate_records(
                     "expected_candidate_index": record.selected_candidate_index,
                     "predicted_option_index": option_index,
                     "predicted_real_candidate_index": real_candidate_index,
+                    "supported_candidate_indices": [
+                        position
+                        for position, valid in enumerate(
+                            examples[index].option_valid_mask[:MAX_CANDIDATES]
+                        )
+                        if valid
+                    ],
                     "legacy_predicted_action": RESOLVER_ACTIONS[
                         legacy_predictions[offset]
                     ],

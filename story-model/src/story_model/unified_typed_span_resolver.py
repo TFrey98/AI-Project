@@ -1,15 +1,17 @@
 """Phase 33 evidence-conditioned routing for typed whole-span resolution.
 
 Phase 32 proved that the candidate scorer ranks every real candidate correctly,
-but its independent action head can still reject that result.  Phase 33 keeps
-the exact Phase 32 parameterization and gives the candidate scorer one extra
-structured option: no supported candidate.  The old three-way action head is
-used only for the already-stable structured-versus-generate decision.
+but its independent action head can still reject that result. Phase 33 keeps
+the exact Phase 32 parameterization and uses one extra structured option for no
+supported candidate. Phase 33b constrains those options with deterministic type
+and evidence support while preserving raw candidate ranking as an auxiliary
+objective. The old three-way action head is used only for the already-stable
+structured-versus-generate decision.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Optional, Union
 
 import torch
@@ -42,6 +44,7 @@ ROUTING_MODES = (STRUCTURED_MODE, GENERATE_MODE)
 MODE_TO_INDEX = {mode: index for index, mode in enumerate(ROUTING_MODES)}
 NO_SUPPORT_OPTION_INDEX = MAX_CANDIDATES
 MAX_STRUCTURED_OPTIONS = MAX_CANDIDATES + 1
+SUPPORT_MASK_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,43 @@ def _padded(tokens: list[int], block_size: int, label: str) -> tuple[int, ...]:
             f"{label} needs {len(tokens)} tokens but block_size is {block_size}"
         )
     return tuple(tokens + [0] * (block_size - len(tokens)))
+
+
+def _contains_exact_value(prompt: str, value: str) -> bool:
+    """Return whether ``value`` occurs on lexical boundaries in ``prompt``."""
+
+    offset = 0
+    while True:
+        start = prompt.find(value, offset)
+        if start < 0:
+            return False
+        end = start + len(value)
+        left_boundary = (
+            start == 0
+            or not value[0].isalnum()
+            or not prompt[start - 1].isalnum()
+        )
+        right_boundary = (
+            end == len(prompt)
+            or not value[-1].isalnum()
+            or not prompt[end].isalnum()
+        )
+        if left_boundary and right_boundary:
+            return True
+        offset = start + 1
+
+
+def candidate_is_supported(record: ExpandedResolverRecord, index: int) -> bool:
+    """Check the typed evidence constraint for one supplied candidate."""
+
+    if not 0 <= index < len(record.candidates):
+        return False
+    candidate = record.candidates[index]
+    return (
+        record.expected_type is not None
+        and candidate.value_type == record.expected_type
+        and _contains_exact_value(record.prompt, candidate.text)
+    )
 
 
 def _no_support_prompt(record: ExpandedResolverRecord) -> str:
@@ -111,7 +151,8 @@ def encode_unified_record(
     option_views = list(phase32.candidate_view_input_ids)
     option_lengths = list(phase32.candidate_view_sequence_tokens)
     option_valid = [
-        position < len(record.candidates) for position in range(MAX_CANDIDATES)
+        candidate_is_supported(record, position)
+        for position in range(MAX_CANDIDATES)
     ]
 
     no_support_tokens = tokenizer.encode(_no_support_prompt(record))
@@ -123,9 +164,12 @@ def encode_unified_record(
         )
     )
     option_lengths.append(len(no_support_tokens))
-    # Sentinel availability is derived from the supplied resolver type, not
-    # the training label.  Generate records have no resolver type by schema.
-    option_valid.append(record.expected_type is not None)
+    # Evidence support and type compatibility are upstream facts, not model
+    # predictions. The sentinel is the only structured option when no real
+    # candidate satisfies both constraints.
+    option_valid.append(
+        record.expected_type is not None and not any(option_valid)
+    )
 
     mode_target = MODE_TO_INDEX[
         GENERATE_MODE
@@ -140,6 +184,10 @@ def encode_unified_record(
         option_target = NO_SUPPORT_OPTION_INDEX
     else:
         option_target = -100
+    if option_target != -100 and not option_valid[option_target]:
+        raise ValueError(
+            f"{record.record_id} target option is not supported by its evidence"
+        )
 
     return EncodedUnifiedExample(
         record_id=record.record_id,
@@ -220,10 +268,12 @@ def unified_batch(
 class UnifiedResolverOutput:
     mode_logits: torch.Tensor
     option_logits: torch.Tensor
+    raw_option_logits: torch.Tensor
     legacy_action_logits: torch.Tensor
     loss: Optional[torch.Tensor]
     mode_loss: Optional[torch.Tensor]
     option_loss: Optional[torch.Tensor]
+    raw_candidate_loss: Optional[torch.Tensor]
 
 
 class UnifiedTypedSpanResolver(nn.Module):
@@ -277,6 +327,7 @@ class UnifiedTypedSpanResolver(nn.Module):
         option_valid_mask: torch.Tensor,
         mode_targets: Optional[torch.Tensor] = None,
         option_targets: Optional[torch.Tensor] = None,
+        real_candidate_counts: Optional[torch.Tensor] = None,
     ) -> UnifiedResolverOutput:
         batch, option_count, sequence = option_view_tokens.shape
         if option_count != MAX_STRUCTURED_OPTIONS:
@@ -312,13 +363,14 @@ class UnifiedTypedSpanResolver(nn.Module):
         option_states = option_hidden[
             batch_indices, option_indices, option_positions
         ]
-        option_logits = self.candidate_score(option_states).squeeze(-1)
-        option_logits = option_logits.masked_fill(
-            ~option_valid_mask, torch.finfo(option_logits.dtype).min
+        raw_option_logits = self.candidate_score(option_states).squeeze(-1)
+        option_logits = raw_option_logits.masked_fill(
+            ~option_valid_mask, torch.finfo(raw_option_logits.dtype).min
         )
 
         mode_loss = None
         option_loss = None
+        raw_candidate_loss = None
         loss = None
         if mode_targets is not None:
             mode_loss = F.cross_entropy(mode_logits, mode_targets)
@@ -330,13 +382,42 @@ class UnifiedTypedSpanResolver(nn.Module):
                     option_logits[structured_rows], option_targets[structured_rows]
                 )
                 loss = option_loss if loss is None else loss + option_loss
+            resolve_rows = (
+                (option_targets >= 0) & (option_targets < MAX_CANDIDATES)
+            )
+            if resolve_rows.any():
+                if real_candidate_counts is None:
+                    raise ValueError(
+                        "real_candidate_counts are required for raw ranking loss"
+                    )
+                positions = torch.arange(
+                    MAX_CANDIDATES, device=tokens.device
+                ).unsqueeze(0)
+                inventory_valid = positions < real_candidate_counts.unsqueeze(1)
+                raw_candidate_logits = raw_option_logits[
+                    :, :MAX_CANDIDATES
+                ].masked_fill(
+                    ~inventory_valid,
+                    torch.finfo(raw_option_logits.dtype).min,
+                )
+                raw_candidate_loss = F.cross_entropy(
+                    raw_candidate_logits[resolve_rows],
+                    option_targets[resolve_rows],
+                )
+                loss = (
+                    raw_candidate_loss
+                    if loss is None
+                    else loss + raw_candidate_loss
+                )
         return UnifiedResolverOutput(
             mode_logits=mode_logits,
             option_logits=option_logits,
+            raw_option_logits=raw_option_logits,
             legacy_action_logits=legacy_action_logits,
             loss=loss,
             mode_loss=mode_loss,
             option_loss=option_loss,
+            raw_candidate_loss=raw_candidate_loss,
         )
 
 
@@ -356,6 +437,11 @@ def realize_unified_decision(
     option_index: int,
 ) -> ExpandedResolverDecision:
     action = unified_action(mode_index, option_index)
+    if action == RESOLVE_ACTION and not candidate_is_supported(
+        record, option_index
+    ):
+        decision = realize_expanded_decision(record, CLARIFY_ACTION, None)
+        return replace(decision, guarded=True)
     candidate_index = option_index if action == RESOLVE_ACTION else None
     return realize_expanded_decision(record, action, candidate_index)
 

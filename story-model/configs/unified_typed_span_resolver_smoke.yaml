@@ -38,6 +38,7 @@ data:
   manifest_path: data/character/expanded_typed_span_resolver/manifest.json
   block_size: 1024
   batch_size: 2
+  eval_batch_size: 16
 
 train:
   seed: 1337
@@ -50,10 +51,14 @@ train:
   weight_decay: 0.01
   log_interval: 10
   eval_interval: 25
-  eval_batches: 10
+  eval_examples_per_cell: 4
+  phase31_structured_floor: 0.95
+  phase31_resolve_option_floor: 0.995
+  phase31_sentinel_floor: 0.95
+  phase31_mode_floor: 0.98
   early_stopping_patience: 8
   device: auto
 
 checkpoint:
-  dir: checkpoints/unified_typed_span_resolver_smoke
+  dir: checkpoints/support_constrained_unified_typed_span_resolver_smoke
   save_interval: 25

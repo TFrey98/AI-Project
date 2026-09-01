@@ -23,6 +23,7 @@ from story_model.unified_typed_span_resolver import (
     NO_SUPPORT_OPTION_INDEX,
     STRUCTURED_MODE,
     UnifiedTypedSpanResolver,
+    candidate_is_supported,
     encode_unified_records,
     realize_unified_decision,
     summarize_unified_predictions,
@@ -126,8 +127,83 @@ def test_encoding_preserves_phase32_inputs_and_real_candidate_views():
     assert unified[2].option_target == -100
     assert unified[0].mode_target == MODE_TO_INDEX[STRUCTURED_MODE]
     assert unified[2].mode_target == MODE_TO_INDEX[GENERATE_MODE]
-    assert unified[0].option_valid_mask == (True, True, True, True, True)
+    assert unified[0].option_valid_mask == (True, False, False, False, False)
+    assert unified[1].option_valid_mask == (False, False, False, False, True)
     assert unified[2].option_valid_mask == (False, False, False, False, False)
+
+
+def test_runtime_support_mask_rejects_absent_wrong_type_and_substrings():
+    resolve, clarify, _ = _records()
+    assert candidate_is_supported(resolve, 0)
+    assert not candidate_is_supported(resolve, 1)
+    assert not any(
+        candidate_is_supported(clarify, index)
+        for index in range(len(clarify.candidates))
+    )
+
+    wrong_type = ExpandedResolverRecord(
+        record_id="wrong-type",
+        source_context_id="wrong-type",
+        conversation_id="wrong-type",
+        split="train",
+        skill="multi_turn_memory",
+        case="wrong_type",
+        prompt="The note mentions puppies, not a container.",
+        expected_action=CLARIFY_ACTION,
+        expected_type="container",
+        candidates=(ExpandedCandidate("puppies", "animal"),),
+        selected_candidate_index=None,
+        response_template=CLARIFICATION_RESPONSE,
+        expected_value="silver drawer",
+        alternative_value="amber locker",
+    )
+    substring = ExpandedResolverRecord(
+        record_id="substring",
+        source_context_id="substring",
+        conversation_id="substring",
+        split="train",
+        skill="multi_turn_memory",
+        case="missing_evidence",
+        prompt="The location was recorded elsewhere.",
+        expected_action=CLARIFY_ACTION,
+        expected_type="container",
+        candidates=(ExpandedCandidate("record", "container"),),
+        selected_candidate_index=None,
+        response_template=CLARIFICATION_RESPONSE,
+        expected_value="record",
+        alternative_value=None,
+    )
+    assert not candidate_is_supported(wrong_type, 0)
+    assert not candidate_is_supported(substring, 0)
+
+
+def test_multiple_supported_candidates_remain_available_for_ranking():
+    record = ExpandedResolverRecord(
+        record_id="ambiguous-support",
+        source_context_id="ambiguous-support",
+        conversation_id="ambiguous-support",
+        split="train",
+        skill="multi_turn_memory",
+        case="supported",
+        prompt=(
+            "One note names the silver drawer; another names the amber locker."
+        ),
+        expected_action=RESOLVE_ACTION,
+        expected_type="container",
+        candidates=(
+            ExpandedCandidate("silver drawer", "container"),
+            ExpandedCandidate("amber locker", "container"),
+        ),
+        selected_candidate_index=0,
+        response_template="The recorded location is <|resolved_value|>.",
+        expected_value="silver drawer",
+        alternative_value="amber locker",
+        source_phase="phase31",
+    )
+    tokenizer = _tokenizer((record,))
+    encoded = encode_unified_records((record,), tokenizer, 256)[0]
+
+    assert encoded.option_valid_mask == (True, True, False, False, False)
 
 
 def test_no_support_view_exposes_marker_only_when_candidate_is_supported():
@@ -164,12 +240,22 @@ def test_forward_scores_four_candidates_plus_sentinel_with_finite_losses():
     examples = encode_unified_records(records, tokenizer, 256)
     model = UnifiedTypedSpanResolver(_backbone(tokenizer))
     batch = unified_batch(examples, range(len(examples)), "cpu")
-    output = model(*batch[:5], batch[5], batch[6])
+    output = model(*batch[:5], batch[5], batch[6], batch[7])
     assert output.mode_logits.shape == (3, 2)
     assert output.option_logits.shape == (3, 5)
+    assert output.raw_option_logits.shape == (3, 5)
+    assert torch.isfinite(output.raw_option_logits).all()
+    assert output.option_logits[0, 1] == torch.finfo(
+        output.option_logits.dtype
+    ).min
+    assert output.option_logits[1, NO_SUPPORT_OPTION_INDEX] != torch.finfo(
+        output.option_logits.dtype
+    ).min
     assert output.legacy_action_logits.shape == (3, 3)
     assert output.mode_loss is not None and torch.isfinite(output.mode_loss)
     assert output.option_loss is not None and torch.isfinite(output.option_loss)
+    assert output.raw_candidate_loss is not None
+    assert torch.isfinite(output.raw_candidate_loss)
     assert output.loss is not None and torch.isfinite(output.loss)
 
 
@@ -184,6 +270,11 @@ def test_realization_maps_real_sentinel_and_generate_options():
         clarify, MODE_TO_INDEX[STRUCTURED_MODE], NO_SUPPORT_OPTION_INDEX
     )
     assert absent.action == CLARIFY_ACTION
+    unsupported = realize_unified_decision(
+        resolve, MODE_TO_INDEX[STRUCTURED_MODE], 1
+    )
+    assert unsupported.action == CLARIFY_ACTION
+    assert unsupported.guarded
     normal = realize_unified_decision(
         generate, MODE_TO_INDEX[GENERATE_MODE], 0
     )

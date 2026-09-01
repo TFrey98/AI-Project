@@ -150,7 +150,17 @@ def _assess(model, examples, records, device):
         output = model(*batch[:5])
         modes = output.mode_logits.argmax(dim=-1).tolist()
         options = output.option_logits.argmax(dim=-1).tolist()
-        real_options = output.option_logits[:, :4].argmax(dim=-1).tolist()
+        candidate_positions = torch.arange(4, device=device).unsqueeze(0)
+        inventory_valid = candidate_positions < batch[7].unsqueeze(1)
+        real_options = (
+            output.raw_option_logits[:, :4]
+            .masked_fill(
+                ~inventory_valid,
+                torch.finfo(output.raw_option_logits.dtype).min,
+            )
+            .argmax(dim=-1)
+            .tolist()
+        )
         for record, mode, option, real_option in zip(
             records[start : start + 8], modes, options, real_options
         ):
@@ -228,7 +238,7 @@ def main() -> None:
     for step in range(args.steps + 1):
         indices = torch.randint(0, len(train_examples), (8,)).tolist()
         batch = unified_batch(train_examples, indices, device)
-        output = model(*batch[:5], batch[5], batch[6])
+        output = model(*batch[:5], batch[5], batch[6], batch[7])
         assert output.loss is not None
         if initial is None:
             initial = float(output.loss.detach())
