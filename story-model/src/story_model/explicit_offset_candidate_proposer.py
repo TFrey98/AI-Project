@@ -42,6 +42,8 @@ from story_model.unified_typed_span_resolver import (
 
 EXPLICIT_OFFSET_PROPOSER_VERSION = 1
 BOUNDARY_OBJECTIVE_VERSION = 1
+TOKEN_WIDTH_GEOMETRY_VERSION = 1
+TOKEN_END_GEOMETRY_VERSION = 1
 PROPOSAL_TYPES = tuple(sorted(set(SKILL_VALUE_TYPES.values())))
 TYPE_TO_INDEX = {value_type: index for index, value_type in enumerate(PROPOSAL_TYPES)}
 OUTSIDE_TAG = 0
@@ -51,6 +53,34 @@ EXCLUDED_PROPOSER_CASES = ("wrong_type",)
 PERMISSIVE_DECODE_POLICY = "permissive"
 STRICT_DECODE_POLICY = "strict"
 DECODE_POLICIES = (PERMISSIVE_DECODE_POLICY, STRICT_DECODE_POLICY)
+
+
+def checkpoint_uses_token_width_geometry(extra: dict) -> bool:
+    """Return whether proposer metadata selects the Phase 34f geometry."""
+
+    version = extra.get("token_width_geometry_version")
+    if version is None:
+        return False
+    if type(version) is not int or (
+        version != TOKEN_WIDTH_GEOMETRY_VERSION
+    ):
+        raise ValueError(
+            "checkpoint has an unsupported token-width geometry version"
+        )
+    return True
+
+
+def checkpoint_uses_token_end_geometry(extra: dict) -> bool:
+    """Return whether proposer metadata selects the Phase 34g geometry."""
+
+    version = extra.get("token_end_geometry_version")
+    if version is None:
+        return False
+    if type(version) is not int or version != TOKEN_END_GEOMETRY_VERSION:
+        raise ValueError(
+            "checkpoint has an unsupported token-end geometry version"
+        )
+    return True
 
 
 def begin_tag(value_type: str) -> int:
@@ -423,8 +453,14 @@ class ExplicitOffsetCandidateProposer(nn.Module):
         self,
         resolver: UnifiedTypedSpanResolver,
         tokenizer: ByteBPETokenizer,
+        token_width_geometry: bool = False,
+        token_end_geometry: bool = False,
     ) -> None:
         super().__init__()
+        if token_width_geometry and token_end_geometry:
+            raise ValueError(
+                "token-width and token-end geometry are mutually exclusive"
+            )
         self.resolver = resolver
         for parameter in self.resolver.parameters():
             parameter.requires_grad_(False)
@@ -452,6 +488,24 @@ class ExplicitOffsetCandidateProposer(nn.Module):
         self.proposal_tag = nn.Linear(
             embedding_dim, 1 + 2 * len(PROPOSAL_TYPES)
         )
+        self.token_width_geometry = bool(token_width_geometry)
+        self.proposal_token_width_embedding = None
+        if self.token_width_geometry:
+            # Preserve the Phase 34d RNG trajectory and initial logits. The
+            # zero rows learn independently once examples of each width arrive.
+            with torch.random.fork_rng(devices=[]):
+                self.proposal_token_width_embedding = nn.Embedding(
+                    self.source_width + 1, embedding_dim
+                )
+            nn.init.zeros_(self.proposal_token_width_embedding.weight)
+        self.token_end_geometry = bool(token_end_geometry)
+        self.proposal_token_end_embedding = None
+        if self.token_end_geometry:
+            with torch.random.fork_rng(devices=[]):
+                self.proposal_token_end_embedding = nn.Embedding(
+                    2, embedding_dim, padding_idx=0
+                )
+            nn.init.zeros_(self.proposal_token_end_embedding.weight)
         self.register_buffer(
             "tag_class_weights",
             torch.tensor(
@@ -505,11 +559,24 @@ class ExplicitOffsetCandidateProposer(nn.Module):
         queries = hidden[torch.arange(len(tokens), device=tokens.device), positions]
         base = self.proposal_key(hidden) + self.proposal_query(queries).unsqueeze(1)
         offsets = torch.arange(self.source_width, device=tokens.device)
-        byte_states = torch.tanh(
+        byte_inputs = (
             base.unsqueeze(2)
             + byte_embeddings
             + self.proposal_offset_embedding(offsets)[None, None, :, :]
         )
+        if self.proposal_token_width_embedding is not None:
+            token_widths = self.token_byte_mask[tokens].sum(dim=-1)
+            width_states = self.proposal_token_width_embedding(token_widths)
+            byte_inputs = byte_inputs + width_states.unsqueeze(2)
+        if self.proposal_token_end_embedding is not None:
+            token_widths = self.token_byte_mask[tokens].sum(dim=-1)
+            token_ends = offsets[None, None, :] == (
+                token_widths.unsqueeze(-1) - 1
+            )
+            byte_inputs = byte_inputs + self.proposal_token_end_embedding(
+                token_ends.long()
+            )
+        byte_states = torch.tanh(byte_inputs)
         tag_logits = self.proposal_tag(byte_states)
         tag_logits = tag_logits.masked_fill(
             ~self.token_byte_mask[tokens].unsqueeze(-1),

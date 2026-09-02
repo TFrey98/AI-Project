@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import torch
 
+from scripts.audit_explicit_offset_tag_confusion import (
+    _begin_geometry_rows,
+    _summarize_begin_geometry,
+)
 from story_model.data import ByteBPETokenizer
 from story_model.expanded_typed_span_resolver import (
     CLARIFICATION_RESPONSE,
@@ -18,10 +22,14 @@ from story_model.explicit_offset_candidate_proposer import (
     PERMISSIVE_DECODE_POLICY,
     PROPOSAL_TYPES,
     STRICT_DECODE_POLICY,
+    TOKEN_END_GEOMETRY_VERSION,
+    TOKEN_WIDTH_GEOMETRY_VERSION,
     EvidenceSpan,
     ExplicitOffsetCandidateProposer,
     begin_tag,
     boundary_auxiliary_losses,
+    checkpoint_uses_token_end_geometry,
+    checkpoint_uses_token_width_geometry,
     decode_proposal_result,
     decode_proposed_spans,
     encode_proposal_record,
@@ -81,7 +89,12 @@ def _tokenizer(records):
     ).with_special_tokens(EXPANDED_CONTROL_TOKENS)
 
 
-def _model(tokenizer, block_size=256):
+def _model(
+    tokenizer,
+    block_size=256,
+    token_width_geometry=False,
+    token_end_geometry=False,
+):
     backbone = build_model(
         {
             "name": "transformer",
@@ -98,7 +111,10 @@ def _model(tokenizer, block_size=256):
         block_size,
     )
     return ExplicitOffsetCandidateProposer(
-        UnifiedTypedSpanResolver(backbone), tokenizer
+        UnifiedTypedSpanResolver(backbone),
+        tokenizer,
+        token_width_geometry=token_width_geometry,
+        token_end_geometry=token_end_geometry,
     )
 
 
@@ -335,6 +351,191 @@ def test_proposer_freezes_resolver_and_computes_finite_loss():
         "proposal_tag.weight",
         "proposal_tag.bias",
     }
+
+
+def test_token_width_geometry_preserves_initial_logits_and_rng_trajectory():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+    encoded = encode_proposal_record(record, tokenizer, 256)
+    batch = proposal_batch(
+        (encoded,),
+        (0,),
+        tokenizer,
+        max(tokenizer.token_byte_length(index) for index in range(
+            tokenizer.vocab_size
+        )),
+        "cpu",
+    )
+    torch.manual_seed(2026)
+    baseline = _model(tokenizer)
+    state_after_baseline = torch.random.get_rng_state()
+    torch.manual_seed(2026)
+    geometry = _model(tokenizer, token_width_geometry=True)
+    state_after_geometry = torch.random.get_rng_state()
+
+    assert torch.equal(state_after_baseline, state_after_geometry)
+    baseline_parameters = dict(baseline.named_parameters())
+    geometry_parameters = dict(geometry.named_parameters())
+    for name, parameter in baseline_parameters.items():
+        assert torch.equal(parameter, geometry_parameters[name])
+    width = geometry.proposal_token_width_embedding
+    assert width is not None
+    assert not bool((width.weight != 0).any())
+    assert torch.equal(
+        baseline(*batch).tag_logits,
+        geometry(*batch).tag_logits,
+    )
+
+
+def test_token_width_geometry_is_trainable_and_versioned():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+    encoded = encode_proposal_record(record, tokenizer, 256)
+    model = _model(tokenizer, token_width_geometry=True)
+    batch = proposal_batch(
+        (encoded,), (0,), tokenizer, model.source_width, "cpu"
+    )
+
+    output = model(*batch, boundary_loss_weight=1.0)
+    assert output.loss is not None
+    output.loss.backward()
+
+    width = model.proposal_token_width_embedding
+    assert width is not None and width.weight.grad is not None
+    assert bool((width.weight.grad != 0).any())
+    trainable = {
+        name
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    }
+    assert trainable == {
+        "proposal_query.weight",
+        "proposal_key.weight",
+        "proposal_offset_embedding.weight",
+        "proposal_tag.weight",
+        "proposal_tag.bias",
+        "proposal_token_width_embedding.weight",
+    }
+    assert TOKEN_WIDTH_GEOMETRY_VERSION == 1
+    assert not checkpoint_uses_token_width_geometry({})
+    assert checkpoint_uses_token_width_geometry(
+        {"token_width_geometry_version": 1}
+    )
+    try:
+        checkpoint_uses_token_width_geometry(
+            {"token_width_geometry_version": 2}
+        )
+    except ValueError as error:
+        assert "unsupported token-width geometry" in str(error)
+    else:
+        raise AssertionError("unsupported geometry version was accepted")
+
+
+def test_begin_geometry_audit_uses_gold_start_token_width_and_offset():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+    encoded = encode_proposal_record(record, tokenizer, 256)
+    logits = _perfect_logits(encoded, tokenizer)
+
+    rows = _begin_geometry_rows(logits, encoded, tokenizer)
+
+    assert len(rows) == len(encoded.gold_spans)
+    for span, row in zip(encoded.gold_spans, rows):
+        token_position, byte_offset = _token_byte_position(
+            encoded, tokenizer, span.byte_start
+        )
+        token_id = encoded.input_ids[token_position]
+        assert row["token_width"] == tokenizer.token_byte_length(token_id)
+        assert row["token_byte_offset"] == byte_offset
+        assert row["token_end"] == (
+            byte_offset + 1 == tokenizer.token_byte_length(token_id)
+        )
+        assert row["begin_as_inside"] is False
+    summary = _summarize_begin_geometry(rows)
+    assert summary["overall"]["gold_begin_count"] == len(rows)
+    assert summary["overall"]["begin_as_inside_rate"] == 0.0
+
+
+def test_token_end_geometry_preserves_initial_logits_and_rng_trajectory():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+    encoded = encode_proposal_record(record, tokenizer, 256)
+    batch = proposal_batch(
+        (encoded,),
+        (0,),
+        tokenizer,
+        max(
+            tokenizer.token_byte_length(index)
+            for index in range(tokenizer.vocab_size)
+        ),
+        "cpu",
+    )
+    torch.manual_seed(2034)
+    baseline = _model(tokenizer)
+    state_after_baseline = torch.random.get_rng_state()
+    torch.manual_seed(2034)
+    geometry = _model(tokenizer, token_end_geometry=True)
+    state_after_geometry = torch.random.get_rng_state()
+
+    assert torch.equal(state_after_baseline, state_after_geometry)
+    geometry_parameters = dict(geometry.named_parameters())
+    for name, parameter in baseline.named_parameters():
+        assert torch.equal(parameter, geometry_parameters[name])
+    marker = geometry.proposal_token_end_embedding
+    assert marker is not None
+    assert marker.padding_idx == 0
+    assert not bool((marker.weight != 0).any())
+    assert torch.equal(
+        baseline(*batch).tag_logits,
+        geometry(*batch).tag_logits,
+    )
+
+
+def test_token_end_geometry_is_trainable_versioned_and_exclusive():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+    encoded = encode_proposal_record(record, tokenizer, 256)
+    model = _model(tokenizer, token_end_geometry=True)
+    batch = proposal_batch(
+        (encoded,), (0,), tokenizer, model.source_width, "cpu"
+    )
+
+    output = model(*batch, boundary_loss_weight=1.0)
+    assert output.loss is not None
+    output.loss.backward()
+
+    marker = model.proposal_token_end_embedding
+    assert marker is not None and marker.weight.grad is not None
+    assert not bool((marker.weight.grad[0] != 0).any())
+    assert bool((marker.weight.grad[1] != 0).any())
+    trainable = {
+        name
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    }
+    assert trainable == {
+        "proposal_query.weight",
+        "proposal_key.weight",
+        "proposal_offset_embedding.weight",
+        "proposal_tag.weight",
+        "proposal_tag.bias",
+        "proposal_token_end_embedding.weight",
+    }
+    assert TOKEN_END_GEOMETRY_VERSION == 1
+    assert not checkpoint_uses_token_end_geometry({})
+    assert checkpoint_uses_token_end_geometry(
+        {"token_end_geometry_version": 1}
+    )
+    try:
+        _model(
+            tokenizer,
+            token_width_geometry=True,
+            token_end_geometry=True,
+        )
+    except ValueError as error:
+        assert "mutually exclusive" in str(error)
+    else:
+        raise AssertionError("stacked geometry features were accepted")
 
 
 def test_boundary_auxiliary_loss_supervises_only_gold_starts_and_ends():

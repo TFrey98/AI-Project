@@ -22,6 +22,8 @@ from story_model.explicit_offset_candidate_proposer import (
     PERMISSIVE_DECODE_POLICY,
     STRICT_DECODE_POLICY,
     ExplicitOffsetCandidateProposer,
+    checkpoint_uses_token_end_geometry,
+    checkpoint_uses_token_width_geometry,
     decode_proposal_result,
     encode_proposal_records,
     proposal_batch,
@@ -73,7 +75,12 @@ def _load_model(path: Path, device: torch.device):
     block_size = int(config["data"]["block_size"])
     backbone = build_model(config["model"], tokenizer.vocab_size, block_size)
     resolver = UnifiedTypedSpanResolver(backbone)
-    model = ExplicitOffsetCandidateProposer(resolver, tokenizer)
+    model = ExplicitOffsetCandidateProposer(
+        resolver,
+        tokenizer,
+        token_width_geometry=checkpoint_uses_token_width_geometry(extra),
+        token_end_geometry=checkpoint_uses_token_end_geometry(extra),
+    )
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
     model.to(device).eval()
     return model, tokenizer, block_size, checkpoint

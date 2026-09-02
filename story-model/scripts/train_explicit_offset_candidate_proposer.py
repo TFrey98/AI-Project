@@ -22,6 +22,8 @@ from story_model.explicit_offset_candidate_proposer import (
     BOUNDARY_OBJECTIVE_VERSION,
     EXCLUDED_PROPOSER_CASES,
     EXPLICIT_OFFSET_PROPOSER_VERSION,
+    TOKEN_END_GEOMETRY_VERSION,
+    TOKEN_WIDTH_GEOMETRY_VERSION,
     ExplicitOffsetCandidateProposer,
     decode_proposed_spans,
     encode_proposal_records,
@@ -71,7 +73,57 @@ def _load_config(path: Path) -> dict:
     )
     if boundary_loss_weight < 0.0 or not math.isfinite(boundary_loss_weight):
         raise ValueError("boundary_loss_weight must be finite and nonnegative")
+    geometry_version = config.get("train", {}).get(
+        "token_width_geometry_version"
+    )
+    end_geometry_version = config.get("train", {}).get(
+        "token_end_geometry_version"
+    )
+    if geometry_version is not None and end_geometry_version is not None:
+        raise ValueError(
+            "token-width and token-end geometry are mutually exclusive"
+        )
+    if geometry_version is not None:
+        if type(geometry_version) is not int or (
+            geometry_version != TOKEN_WIDTH_GEOMETRY_VERSION
+        ):
+            raise ValueError("unsupported token_width_geometry_version")
+        if abs(boundary_loss_weight - 1.0) > 1.0e-9:
+            raise ValueError(
+                "token-width geometry requires boundary_loss_weight=1.0"
+            )
+    if end_geometry_version is not None:
+        if type(end_geometry_version) is not int or (
+            end_geometry_version != TOKEN_END_GEOMETRY_VERSION
+        ):
+            raise ValueError("unsupported token_end_geometry_version")
+        if abs(boundary_loss_weight - 1.0) > 1.0e-9:
+            raise ValueError(
+                "token-end geometry requires boundary_loss_weight=1.0"
+            )
+        if not config.get("train", {}).get("token_end_premise_path"):
+            raise ValueError(
+                "token-end geometry requires token_end_premise_path"
+            )
     return config
+
+
+def _read_token_end_premise(train_config: dict):
+    if train_config.get("token_end_geometry_version") is None:
+        return None, None
+    path = Path(train_config["token_end_premise_path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    if report.get("token_end_premise_version") != 1:
+        raise ValueError("token-end premise report has an unsupported version")
+    decision = report.get("decision", {})
+    if (
+        decision.get("branch") != "token_end_geometry_indicated"
+        or decision.get("training_authorized") is not True
+    ):
+        raise ValueError(
+            "token-end premise audit does not authorize Phase 34g training"
+        )
+    return path, report
 
 
 def _eligible_records(path: str | Path):
@@ -283,6 +335,9 @@ def main() -> None:
     config = _load_config(args.config)
     data_config = config["data"]
     train_config = config["train"]
+    token_end_premise_path, token_end_premise = _read_token_end_premise(
+        train_config
+    )
     seed_everything(int(train_config.get("seed", 1337)))
     device = torch.device(resolve_device(train_config.get("device", "auto")))
 
@@ -313,7 +368,14 @@ def main() -> None:
     backbone = build_model(config["model"], tokenizer.vocab_size, block_size)
     resolver = UnifiedTypedSpanResolver(backbone)
     resolver.load_state_dict(checkpoint["model_state_dict"], strict=True)
-    model = ExplicitOffsetCandidateProposer(resolver, tokenizer).to(device)
+    geometry_version = train_config.get("token_width_geometry_version")
+    end_geometry_version = train_config.get("token_end_geometry_version")
+    model = ExplicitOffsetCandidateProposer(
+        resolver,
+        tokenizer,
+        token_width_geometry=geometry_version is not None,
+        token_end_geometry=end_geometry_version is not None,
+    ).to(device)
 
     phase31_train = _eligible_records(data_config["phase31_train_path"])
     phase31_val = _eligible_records(data_config["phase31_val_path"])
@@ -387,6 +449,16 @@ def main() -> None:
             BOUNDARY_OBJECTIVE_VERSION if boundary_loss_weight else None
         ),
         "boundary_loss_weight": boundary_loss_weight,
+        "token_width_geometry_version": geometry_version,
+        "token_end_geometry_version": end_geometry_version,
+        "token_end_premise_path": (
+            str(token_end_premise_path) if token_end_premise_path else None
+        ),
+        "token_end_premise_input_sha256": (
+            token_end_premise.get("input_sha256")
+            if token_end_premise is not None
+            else None
+        ),
         "excluded_proposer_cases": list(EXCLUDED_PROPOSER_CASES),
         **training_fingerprints(tokenizer.to_dict(), manifests),
     }
@@ -400,6 +472,11 @@ def main() -> None:
     print("frozen architecture parameters: backbone, action_head, candidate_score")
     print("new architecture parameters: " + ", ".join(trainable_names))
     print(f"proposal byte width: {model.source_width}")
+    if geometry_version is not None:
+        print(f"token-width geometry: version {geometry_version}")
+    if end_geometry_version is not None:
+        print(f"token-end geometry: version {end_geometry_version}")
+        print(f"token-end premise: {token_end_premise_path}")
     if boundary_loss_weight:
         print("loss objective: typed_byte_BIO+boundary_transition")
         print(f"boundary loss weight: {boundary_loss_weight:g}")

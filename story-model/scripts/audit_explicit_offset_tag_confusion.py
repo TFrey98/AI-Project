@@ -21,6 +21,8 @@ from story_model.explicit_offset_candidate_proposer import (
     EXCLUDED_PROPOSER_CASES,
     EXPLICIT_OFFSET_PROPOSER_VERSION,
     ExplicitOffsetCandidateProposer,
+    checkpoint_uses_token_end_geometry,
+    checkpoint_uses_token_width_geometry,
     encode_proposal_records,
     proposal_batch,
     proposal_record_is_eligible,
@@ -35,6 +37,7 @@ try:
     from scripts.phase34c_tag_confusion_decision import (
         CURRENT_CLASS_WEIGHTS,
         add_tag_sequence,
+        collapsed_tag,
         merge_tag_audit,
         new_tag_audit,
         summarize_tag_audit,
@@ -46,6 +49,7 @@ except ModuleNotFoundError as error:
     from phase34c_tag_confusion_decision import (  # type: ignore[no-redef]
         CURRENT_CLASS_WEIGHTS,
         add_tag_sequence,
+        collapsed_tag,
         merge_tag_audit,
         new_tag_audit,
         summarize_tag_audit,
@@ -77,7 +81,12 @@ def _load_model(path: Path, device: torch.device):
     block_size = int(config["data"]["block_size"])
     backbone = build_model(config["model"], tokenizer.vocab_size, block_size)
     resolver = UnifiedTypedSpanResolver(backbone)
-    model = ExplicitOffsetCandidateProposer(resolver, tokenizer)
+    model = ExplicitOffsetCandidateProposer(
+        resolver,
+        tokenizer,
+        token_width_geometry=checkpoint_uses_token_width_geometry(extra),
+        token_end_geometry=checkpoint_uses_token_end_geometry(extra),
+    )
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
     model.to(device).eval()
     return model, tokenizer, block_size, checkpoint
@@ -115,6 +124,68 @@ def _flatten_prompt_predictions(logits, example, tokenizer):
     return gold.tolist(), predicted.tolist(), nll.tolist()
 
 
+def _begin_geometry_rows(logits, example, tokenizer) -> list[dict]:
+    token_ranges = []
+    cursor = 0
+    for token_position in range(example.prompt_token_count):
+        token_id = example.input_ids[token_position]
+        token_width = tokenizer.token_byte_length(token_id)
+        token_ranges.append(
+            (cursor, cursor + token_width, token_position, token_width)
+        )
+        cursor += token_width
+    rows = []
+    for span in example.gold_spans:
+        for token_start, token_end, token_position, token_width in token_ranges:
+            if token_start <= span.byte_start < token_end:
+                byte_offset = span.byte_start - token_start
+                break
+        else:
+            raise RuntimeError("gold start is outside prompt token ranges")
+        predicted = int(logits[token_position, byte_offset].argmax())
+        rows.append(
+            {
+                "token_width": token_width,
+                "token_byte_offset": byte_offset,
+                "token_alignment": (
+                    "at_token_start" if byte_offset == 0 else "inside_token"
+                ),
+                "token_end": byte_offset + 1 == token_width,
+                "begin_as_inside": collapsed_tag(predicted) == "I",
+            }
+        )
+    return rows
+
+
+def _summarize_begin_geometry(rows) -> dict:
+    rows = tuple(rows)
+
+    def summarize(group) -> dict:
+        group = tuple(group)
+        errors = sum(bool(row["begin_as_inside"]) for row in group)
+        return {
+            "gold_begin_count": len(group),
+            "begin_as_inside_count": errors,
+            "begin_as_inside_rate": errors / len(group) if group else 0.0,
+        }
+
+    dimensions = {}
+    for field in (
+        "token_width",
+        "token_byte_offset",
+        "token_alignment",
+        "token_end",
+    ):
+        values = sorted({str(row[field]) for row in rows})
+        dimensions[field] = {
+            value: summarize(
+                row for row in rows if str(row[field]) == value
+            )
+            for value in values
+        }
+    return {"overall": summarize(rows), "dimensions": dimensions}
+
+
 @torch.no_grad()
 def evaluate_records(
     model,
@@ -134,6 +205,7 @@ def evaluate_records(
         raise RuntimeError("eligible records and encoded examples diverged")
     overall = new_tag_audit()
     per_skill = defaultdict(new_tag_audit)
+    begin_geometry = []
     started = time.monotonic()
     batch_total = (len(examples) + batch_size - 1) // batch_size
     for batch_number, start in enumerate(
@@ -153,6 +225,16 @@ def evaluate_records(
             add_tag_sequence(row_audit, gold, predicted, nll)
             merge_tag_audit(overall, row_audit)
             merge_tag_audit(per_skill[records[index].skill], row_audit)
+            for row in _begin_geometry_rows(
+                logits[offset], examples[index], tokenizer
+            ):
+                begin_geometry.append(
+                    {
+                        **row,
+                        "split": records[index].split,
+                        "skill": records[index].skill,
+                    }
+                )
         if progress_every and (
             batch_number % progress_every == 0 or batch_number == batch_total
         ):
@@ -163,7 +245,7 @@ def evaluate_records(
                 f"({completed / elapsed:.1f} rows/s)",
                 flush=True,
             )
-    return overall, dict(per_skill), len(records)
+    return overall, dict(per_skill), len(records), begin_geometry
 
 
 def main() -> None:
@@ -215,6 +297,12 @@ def main() -> None:
         "checkpoint_boundary_loss_weight": checkpoint.get("extra", {}).get(
             "boundary_loss_weight", 0.0
         ),
+        "checkpoint_token_width_geometry_version": checkpoint.get(
+            "extra", {}
+        ).get("token_width_geometry_version"),
+        "checkpoint_token_end_geometry_version": checkpoint.get(
+            "extra", {}
+        ).get("token_end_geometry_version"),
         "device": str(device),
         "decoder_policy": "unchanged_permissive",
         "training_changes": "none",
@@ -226,6 +314,7 @@ def main() -> None:
         },
     }
     aggregate = new_tag_audit()
+    target_begin_geometry = []
     for dataset_name, data_dir in (
         ("phase31_regression", args.phase31_data_dir),
         ("phase32", args.phase32_data_dir),
@@ -233,7 +322,12 @@ def main() -> None:
         for split in EXPANDED_SPLITS:
             label = f"{dataset_name}/{split}"
             all_records = load_expanded_records(data_dir / f"{split}.jsonl")
-            split_audit, skill_audits, eligible_rows = evaluate_records(
+            (
+                split_audit,
+                skill_audits,
+                eligible_rows,
+                begin_geometry,
+            ) = evaluate_records(
                 model,
                 tokenizer,
                 block_size,
@@ -244,6 +338,15 @@ def main() -> None:
                 args.progress_every,
             )
             merge_tag_audit(aggregate, split_audit)
+            if dataset_name == "phase31_regression" and split in {
+                "lexical",
+                "transfer",
+            }:
+                target_begin_geometry.extend(
+                    row
+                    for row in begin_geometry
+                    if row["skill"] == "scene_route"
+                )
             metrics = summarize_tag_audit(split_audit, class_weights)
             summary["datasets"][dataset_name]["splits"][split] = {
                 "rows": len(all_records),
@@ -264,6 +367,9 @@ def main() -> None:
                 flush=True,
             )
     summary["overall"] = summarize_tag_audit(aggregate, class_weights)
+    summary["target_begin_geometry"] = _summarize_begin_geometry(
+        target_begin_geometry
+    )
     summary["decision"] = tag_confusion_decision(summary)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
