@@ -1,0 +1,64 @@
+tokenizer:
+  type: byte_bpe
+  vocab_size: 512
+  min_frequency: 2
+  special_tokens:
+    - "<|character|>"
+    - "<|relationship|>"
+    - "<|scene|>"
+    - "<|world_facts|>"
+    - "<|memories|>"
+    - "<|conversation|>"
+    - "<|user|>"
+    - "<|assistant|>"
+    - "<|end|>"
+    - "<|resolver|>"
+    - "<|candidate|>"
+    - "<|decision|>"
+    - "<|resolved_value|>"
+
+model:
+  name: transformer
+  position_encoding: rope
+  normalization: layernorm
+  feed_forward_activation: swiglu
+  embedding_dim: 384
+  attention_heads: 6
+  layers: 8
+  feed_forward_dim: 1024
+  dropout: 0.1
+
+data:
+  type: explicit_offset_candidate_proposer
+  phase31_train_path: data/character/typed_span_resolver/train.jsonl
+  phase31_val_path: data/character/typed_span_resolver/val.jsonl
+  phase31_manifest_path: data/character/typed_span_resolver/manifest.json
+  train_path: data/character/expanded_typed_span_resolver/train.jsonl
+  val_path: data/character/expanded_typed_span_resolver/val.jsonl
+  manifest_path: data/character/expanded_typed_span_resolver/manifest.json
+  block_size: 1024
+  batch_size: 2
+  eval_batch_size: 2
+
+train:
+  seed: 1337
+  learning_rate: 1.0e-3
+  min_learning_rate: 1.0e-4
+  warmup_steps: 50
+  max_steps: 1000
+  gradient_accumulation_steps: 4
+  gradient_clip: 1.0
+  weight_decay: 0.01
+  log_interval: 25
+  eval_interval: 50
+  eval_examples_per_cell: 4
+  span_precision_floor: 0.98
+  span_recall_floor: 0.98
+  answer_candidate_floor: 0.995
+  type_accuracy_floor: 0.99
+  early_stopping_patience: 8
+  device: auto
+
+checkpoint:
+  dir: checkpoints/explicit_offset_candidate_proposer_pilot
+  save_interval: 100
