@@ -49,6 +49,7 @@ def _phase31_metrics(
     resolve_option=1.0,
     raw_candidate=1.0,
     sentinel=1.0,
+    multi_action=1.0,
     mode=1.0,
 ):
     return {
@@ -56,6 +57,7 @@ def _phase31_metrics(
         "resolve_option_accuracy": resolve_option,
         "raw_candidate_top1_accuracy": raw_candidate,
         "clarify_sentinel_accuracy": sentinel,
+        "multi_candidate_action_accuracy": multi_action,
         "mode_accuracy": mode,
     }
 
@@ -67,6 +69,7 @@ def _selection(metrics, loss):
         structured_floor=0.95,
         resolve_option_floor=0.995,
         sentinel_floor=0.95,
+        multi_action_floor=0.95,
         mode_floor=0.98,
     )
 
@@ -87,6 +90,17 @@ def test_checkpoint_selection_rejects_hidden_raw_ranking_regression():
     eligible, _ = _selection(_phase31_metrics(), loss=0.25)
     regressed, _ = _selection(
         _phase31_metrics(raw_candidate=0.99),
+        loss=0.01,
+    )
+
+    assert eligible
+    assert not regressed
+
+
+def test_checkpoint_selection_rejects_ambiguity_action_regression():
+    eligible, _ = _selection(_phase31_metrics(), loss=0.25)
+    regressed, _ = _selection(
+        _phase31_metrics(multi_action=0.94),
         loss=0.01,
     )
 

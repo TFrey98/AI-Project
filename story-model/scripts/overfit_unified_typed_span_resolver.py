@@ -1,4 +1,4 @@
-"""Primitive proof for unified generate/resolve/clarify routing."""
+"""Primitive proof for count-conditioned generate/resolve/clarify routing."""
 
 from __future__ import annotations
 
@@ -8,10 +8,12 @@ import torch
 
 from story_model.data import ByteBPETokenizer
 from story_model.expanded_typed_span_resolver import (
+    ACTION_TO_INDEX,
     CLARIFICATION_RESPONSE,
     CLARIFY_ACTION,
     EXPANDED_CONTROL_TOKENS,
     GENERATE_ACTION,
+    MAX_CANDIDATES,
     RESOLVE_ACTION,
     ExpandedCandidate,
     ExpandedResolverRecord,
@@ -84,7 +86,9 @@ def _records(pairs, split: str, held_out: bool = False):
                     skill="multi_turn_memory",
                     case="supported",
                     prompt=(
-                        f"Verified memory: the token is in {expected}. "
+                        f"The possible containers are {expected} and {alternative}. "
+                        f"Verified memory: {alternative} is unavailable, so the "
+                        f"token is in {expected}. "
                         "Question: where is the token?"
                     ),
                     expected_action=RESOLVE_ACTION,
@@ -94,6 +98,7 @@ def _records(pairs, split: str, held_out: bool = False):
                     response_template="The recorded location is <|resolved_value|>.",
                     expected_value=expected,
                     alternative_value=alternative,
+                    source_phase="phase31",
                 )
             )
         records.append(
@@ -104,7 +109,10 @@ def _records(pairs, split: str, held_out: bool = False):
                 split=split,
                 skill="multi_turn_memory",
                 case="missing_evidence",
-                prompt="No verified location is available. Where is the token?",
+                prompt=(
+                    f"The possible containers are {pair[0]} and {pair[1]}. "
+                    "No fact distinguishes them. Where is the token?"
+                ),
                 expected_action=CLARIFY_ACTION,
                 expected_type="container",
                 candidates=candidates,
@@ -112,6 +120,7 @@ def _records(pairs, split: str, held_out: bool = False):
                 response_template=CLARIFICATION_RESPONSE,
                 expected_value=pair[0],
                 alternative_value=pair[1],
+                source_phase="phase31",
             )
         )
         records.append(
@@ -144,16 +153,20 @@ def _assess(model, examples, records, device):
     sentinel = 0
     clarify_total = 0
     real_candidate = 0
+    multi_action = 0
+    multi_action_total = 0
     for start in range(0, len(records), 8):
         indices = tuple(range(start, min(start + 8, len(records))))
         batch = unified_batch(examples, indices, device)
         output = model(*batch[:5])
         modes = output.mode_logits.argmax(dim=-1).tolist()
         options = output.option_logits.argmax(dim=-1).tolist()
-        candidate_positions = torch.arange(4, device=device).unsqueeze(0)
+        candidate_positions = torch.arange(
+            MAX_CANDIDATES, device=device
+        ).unsqueeze(0)
         inventory_valid = candidate_positions < batch[7].unsqueeze(1)
         real_options = (
-            output.raw_option_logits[:, :4]
+            output.raw_option_logits[:, :MAX_CANDIDATES]
             .masked_fill(
                 ~inventory_valid,
                 torch.finfo(output.raw_option_logits.dtype).min,
@@ -161,9 +174,27 @@ def _assess(model, examples, records, device):
             .argmax(dim=-1)
             .tolist()
         )
-        for record, mode, option, real_option in zip(
-            records[start : start + 8], modes, options, real_options
-        ):
+        multi_actions = output.legacy_action_logits[:, :2].argmax(dim=-1).tolist()
+        outcomes = zip(
+            records[start : start + 8],
+            modes,
+            options,
+            real_options,
+            multi_actions,
+        )
+        for offset, outcome in enumerate(outcomes):
+            record, mode, option, real_option, multi_action_index = outcome
+            eligible_count = sum(
+                examples[start + offset].option_valid_mask[:MAX_CANDIDATES]
+            )
+            if eligible_count >= 2 and record.expected_action != GENERATE_ACTION:
+                multi_action_total += 1
+                expected_multi_action = (
+                    ACTION_TO_INDEX[RESOLVE_ACTION]
+                    if record.expected_action == RESOLVE_ACTION
+                    else ACTION_TO_INDEX[CLARIFY_ACTION]
+                )
+                multi_action += int(multi_action_index == expected_multi_action)
             decision = realize_unified_decision(record, mode, option)
             expected_option = (
                 record.selected_candidate_index
@@ -191,6 +222,8 @@ def _assess(model, examples, records, device):
         "real_candidate": real_candidate,
         "sentinel": sentinel,
         "clarify_total": clarify_total,
+        "multi_action": multi_action,
+        "multi_action_total": multi_action_total,
     }
 
 
@@ -212,7 +245,7 @@ def main() -> None:
         vocab_size=288,
         min_frequency=2,
     ).with_special_tokens(EXPANDED_CONTROL_TOKENS)
-    block_size = 256
+    block_size = 512
     train_examples = encode_unified_records(train_records, tokenizer, block_size)
     held_examples = encode_unified_records(held_records, tokenizer, block_size)
     backbone = build_model(
@@ -264,6 +297,10 @@ def main() -> None:
         f"held-out no-support sentinel: "
         f"{held['sentinel']}/{held['clarify_total']}"
     )
+    print(
+        f"held-out multi-candidate action: "
+        f"{held['multi_action']}/{held['multi_action_total']}"
+    )
     if train["structured"] != 1.0:
         raise SystemExit("primitive failed to fit the structured training set")
     if held["exact"] != held["resolve_total"]:
@@ -272,6 +309,8 @@ def main() -> None:
         raise SystemExit("primitive regressed real-candidate ranking")
     if held["sentinel"] != held["clarify_total"]:
         raise SystemExit("primitive failed held-out no-support routing")
+    if held["multi_action"] != held["multi_action_total"]:
+        raise SystemExit("primitive failed held-out ambiguity routing")
 
 
 if __name__ == "__main__":

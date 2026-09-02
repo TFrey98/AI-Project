@@ -1,12 +1,12 @@
-"""Phase 33 evidence-conditioned routing for typed whole-span resolution.
+"""Phase 33 count-conditioned routing for typed whole-span resolution.
 
 Phase 32 proved that the candidate scorer ranks every real candidate correctly,
 but its independent action head can still reject that result. Phase 33 keeps
-the exact Phase 32 parameterization and uses one extra structured option for no
-supported candidate. Phase 33b constrains those options with deterministic type
-and evidence support while preserving raw candidate ranking as an auxiliary
-objective. The old three-way action head is used only for the already-stable
-structured-versus-generate decision.
+the exact Phase 32 parameterization and uses evidence eligibility to decide
+which part of the structured decision is deterministic. Zero eligible real
+candidates clarifies, one resolves directly, and two or more defer the
+resolve-versus-clarify decision to the legacy action head. Raw candidate
+ranking remains a separately supervised objective on every resolve row.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ ROUTING_MODES = (STRUCTURED_MODE, GENERATE_MODE)
 MODE_TO_INDEX = {mode: index for index, mode in enumerate(ROUTING_MODES)}
 NO_SUPPORT_OPTION_INDEX = MAX_CANDIDATES
 MAX_STRUCTURED_OPTIONS = MAX_CANDIDATES + 1
-SUPPORT_MASK_VERSION = 1
+SUPPORT_MASK_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -92,8 +92,16 @@ def _contains_exact_value(prompt: str, value: str) -> bool:
         offset = start + 1
 
 
-def candidate_is_supported(record: ExpandedResolverRecord, index: int) -> bool:
-    """Check the typed evidence constraint for one supplied candidate."""
+def candidate_is_evidence_eligible(
+    record: ExpandedResolverRecord, index: int
+) -> bool:
+    """Check whether one typed candidate is addressable in the evidence.
+
+    Eligibility means a type-compatible lexical mention. It deliberately does
+    not claim that the candidate is asserted true: relational tasks such as
+    ``scene_route`` can mention multiple candidates and require a separate
+    resolve-versus-clarify decision.
+    """
 
     if not 0 <= index < len(record.candidates):
         return False
@@ -106,13 +114,14 @@ def candidate_is_supported(record: ExpandedResolverRecord, index: int) -> bool:
 
 
 def _no_support_prompt(record: ExpandedResolverRecord) -> str:
-    """Build a view that exposes evidence presence without copying its value.
+    """Build the legacy sentinel view retained by the unified input shape.
 
     Real candidate views replace one supplied value with ``CANDIDATE_MARKER``.
     The no-support view applies the same operation to every supplied candidate.
-    Therefore it sees a marker on supported rows and no marker on missing-
-    evidence rows.  Its suffix deliberately has the same compact shape as a
-    real candidate view so the fifth option does not add sequence pressure.
+    Its suffix deliberately has the same compact shape as a real candidate
+    view so the fifth option does not add sequence pressure. Phase 33c routes
+    this sentinel from candidate count and the ambiguity action head rather
+    than treating its raw candidate score as evidence truth.
     """
 
     prompt = record.prompt
@@ -151,7 +160,7 @@ def encode_unified_record(
     option_views = list(phase32.candidate_view_input_ids)
     option_lengths = list(phase32.candidate_view_sequence_tokens)
     option_valid = [
-        candidate_is_supported(record, position)
+        candidate_is_evidence_eligible(record, position)
         for position in range(MAX_CANDIDATES)
     ]
 
@@ -164,12 +173,11 @@ def encode_unified_record(
         )
     )
     option_lengths.append(len(no_support_tokens))
-    # Evidence support and type compatibility are upstream facts, not model
-    # predictions. The sentinel is the only structured option when no real
-    # candidate satisfies both constraints.
-    option_valid.append(
-        record.expected_type is not None and not any(option_valid)
-    )
+    # The sentinel must remain representable on every structured row. A
+    # relational task can mention multiple candidates without supplying the
+    # fact that distinguishes them, so lexical candidate presence cannot make
+    # clarification unavailable.
+    option_valid.append(record.expected_type is not None)
 
     mode_target = MODE_TO_INDEX[
         GENERATE_MODE
@@ -186,7 +194,7 @@ def encode_unified_record(
         option_target = -100
     if option_target != -100 and not option_valid[option_target]:
         raise ValueError(
-            f"{record.record_id} target option is not supported by its evidence"
+            f"{record.record_id} target option is not evidence-eligible"
         )
 
     return EncodedUnifiedExample(
@@ -272,12 +280,68 @@ class UnifiedResolverOutput:
     legacy_action_logits: torch.Tensor
     loss: Optional[torch.Tensor]
     mode_loss: Optional[torch.Tensor]
-    option_loss: Optional[torch.Tensor]
+    ambiguity_action_loss: Optional[torch.Tensor]
     raw_candidate_loss: Optional[torch.Tensor]
 
 
+def count_conditioned_option_logits(
+    raw_option_logits: torch.Tensor,
+    option_valid_mask: torch.Tensor,
+    legacy_action_logits: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply the deterministic 0/1/2+ routing table.
+
+    Returns the routed option logits and each row's number of evidence-eligible
+    real candidates. No learned parameters are introduced by this operation.
+    """
+
+    if raw_option_logits.shape[-1] != MAX_STRUCTURED_OPTIONS:
+        raise ValueError(
+            f"expected {MAX_STRUCTURED_OPTIONS} raw structured option logits"
+        )
+    if option_valid_mask.shape != raw_option_logits.shape:
+        raise ValueError("option_valid_mask must match raw option logits")
+    minimum = torch.finfo(raw_option_logits.dtype).min
+    real_valid = option_valid_mask[:, :MAX_CANDIDATES]
+    eligible_counts = real_valid.sum(dim=-1)
+    masked_real_logits = raw_option_logits[:, :MAX_CANDIDATES].masked_fill(
+        ~real_valid, minimum
+    )
+    best_real_logits = masked_real_logits.max(dim=-1).values
+    best_real_logits = torch.where(
+        eligible_counts > 0,
+        best_real_logits,
+        torch.zeros_like(best_real_logits),
+    )
+    relative_real_logits = (
+        raw_option_logits[:, :MAX_CANDIDATES]
+        - best_real_logits.unsqueeze(-1)
+    )
+    multi_eligible = eligible_counts >= 2
+    resolve_margin = (
+        legacy_action_logits[:, ACTION_TO_INDEX[RESOLVE_ACTION]]
+        - legacy_action_logits[:, ACTION_TO_INDEX[CLARIFY_ACTION]]
+    )
+    relative_real_logits = relative_real_logits + torch.where(
+        multi_eligible,
+        resolve_margin,
+        torch.zeros_like(resolve_margin),
+    ).unsqueeze(-1)
+    routed_real_logits = relative_real_logits.masked_fill(~real_valid, minimum)
+
+    sentinel_input_valid = option_valid_mask[:, NO_SUPPORT_OPTION_INDEX]
+    sentinel_runtime_valid = sentinel_input_valid & (eligible_counts != 1)
+    sentinel_logits = torch.zeros_like(resolve_margin).masked_fill(
+        ~sentinel_runtime_valid, minimum
+    )
+    return (
+        torch.cat((routed_real_logits, sentinel_logits.unsqueeze(-1)), dim=-1),
+        eligible_counts,
+    )
+
+
 class UnifiedTypedSpanResolver(nn.Module):
-    """Phase 32-compatible parameters with evidence-conditioned routing."""
+    """Phase 32-compatible parameters with count-conditioned routing."""
 
     def __init__(self, backbone: nn.Module) -> None:
         super().__init__()
@@ -364,12 +428,18 @@ class UnifiedTypedSpanResolver(nn.Module):
             batch_indices, option_indices, option_positions
         ]
         raw_option_logits = self.candidate_score(option_states).squeeze(-1)
-        option_logits = raw_option_logits.masked_fill(
-            ~option_valid_mask, torch.finfo(raw_option_logits.dtype).min
+
+        # Build the structured decision without asking one softmax to learn
+        # three qualitatively different routing cases.
+        option_logits, eligible_counts = count_conditioned_option_logits(
+            raw_option_logits,
+            option_valid_mask,
+            legacy_action_logits,
         )
+        multi_eligible = eligible_counts >= 2
 
         mode_loss = None
-        option_loss = None
+        ambiguity_action_loss = None
         raw_candidate_loss = None
         loss = None
         if mode_targets is not None:
@@ -377,11 +447,28 @@ class UnifiedTypedSpanResolver(nn.Module):
             loss = mode_loss
         if option_targets is not None:
             structured_rows = option_targets != -100
-            if structured_rows.any():
-                option_loss = F.cross_entropy(
-                    option_logits[structured_rows], option_targets[structured_rows]
+            ambiguity_rows = structured_rows & multi_eligible
+            if ambiguity_rows.any():
+                ambiguity_action_targets = torch.where(
+                    option_targets[ambiguity_rows] == NO_SUPPORT_OPTION_INDEX,
+                    torch.full_like(
+                        option_targets[ambiguity_rows],
+                        ACTION_TO_INDEX[CLARIFY_ACTION],
+                    ),
+                    torch.full_like(
+                        option_targets[ambiguity_rows],
+                        ACTION_TO_INDEX[RESOLVE_ACTION],
+                    ),
                 )
-                loss = option_loss if loss is None else loss + option_loss
+                ambiguity_action_loss = F.cross_entropy(
+                    legacy_action_logits[ambiguity_rows, :2],
+                    ambiguity_action_targets,
+                )
+                loss = (
+                    ambiguity_action_loss
+                    if loss is None
+                    else loss + ambiguity_action_loss
+                )
             resolve_rows = (
                 (option_targets >= 0) & (option_targets < MAX_CANDIDATES)
             )
@@ -416,7 +503,7 @@ class UnifiedTypedSpanResolver(nn.Module):
             legacy_action_logits=legacy_action_logits,
             loss=loss,
             mode_loss=mode_loss,
-            option_loss=option_loss,
+            ambiguity_action_loss=ambiguity_action_loss,
             raw_candidate_loss=raw_candidate_loss,
         )
 
@@ -437,7 +524,7 @@ def realize_unified_decision(
     option_index: int,
 ) -> ExpandedResolverDecision:
     action = unified_action(mode_index, option_index)
-    if action == RESOLVE_ACTION and not candidate_is_supported(
+    if action == RESOLVE_ACTION and not candidate_is_evidence_eligible(
         record, option_index
     ):
         decision = realize_expanded_decision(record, CLARIFY_ACTION, None)
@@ -453,12 +540,22 @@ def _rate(rows: tuple[dict, ...], key: str) -> float:
 def _unified_metrics(rows: tuple[dict, ...]) -> dict:
     resolve = tuple(row for row in rows if row["expected_action"] == RESOLVE_ACTION)
     clarify = tuple(row for row in rows if row["expected_action"] == CLARIFY_ACTION)
+    multi_eligible = tuple(
+        row
+        for row in rows
+        if row.get("eligible_candidate_count", 0) >= 2
+        and row["expected_action"] != GENERATE_ACTION
+    )
     return {
         "mode_accuracy": _rate(rows, "mode_correct"),
         "real_candidate_top1_accuracy": _rate(resolve, "real_candidate_correct"),
         "resolve_option_accuracy": _rate(resolve, "option_correct"),
         "clarify_sentinel_accuracy": _rate(clarify, "option_correct"),
         "no_support_false_positive_rate": _rate(resolve, "no_support_selected"),
+        "multi_candidate_action_examples": len(multi_eligible),
+        "multi_candidate_action_accuracy": _rate(
+            multi_eligible, "multi_candidate_action_correct"
+        ),
     }
 
 

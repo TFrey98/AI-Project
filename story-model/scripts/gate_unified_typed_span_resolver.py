@@ -36,6 +36,21 @@ def _check(
         )
 
 
+def _check_multi_candidate_action(
+    failures: list[str], label: str, metrics: dict
+) -> None:
+    count_name = "multi_candidate_action_examples"
+    accuracy_name = "multi_candidate_action_accuracy"
+    if count_name not in metrics:
+        failures.append(f"{label} is missing {count_name}")
+        return
+    if accuracy_name not in metrics:
+        failures.append(f"{label} is missing {accuracy_name}")
+        return
+    if int(metrics[count_name]) > 0:
+        _check(failures, label, metrics, accuracy_name, 0.95, True)
+
+
 def _full_failures(
     label: str,
     metrics: dict,
@@ -57,6 +72,7 @@ def _full_failures(
     )
     for name, threshold, minimum in checks:
         _check(failures, label, metrics, name, threshold, minimum)
+    _check_multi_candidate_action(failures, label, metrics)
     return failures
 
 
@@ -77,6 +93,7 @@ def _selection_failures(
     )
     for name, threshold, minimum in checks:
         _check(failures, label, metrics, name, threshold, minimum)
+    _check_multi_candidate_action(failures, label, metrics)
     return failures
 
 
@@ -152,6 +169,7 @@ def main() -> None:
         print(
             f"- {split}: resolve >= {resolve_min:.0%}, pairs >= {pair_min:.0%}, "
             "real-candidate >= 99.5%, sentinel >= 95%, generate >= 99%, "
+            "multi-candidate action >= 95% where applicable, "
             "missing/wrong/no-support false-positive <= 2%"
         )
     if failures:

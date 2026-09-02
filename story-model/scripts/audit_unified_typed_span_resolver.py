@@ -1,4 +1,4 @@
-"""Audit Phase 33 encodings against the exact Phase 32 tokenizer and views."""
+"""Audit Phase 33c encodings and the count-conditioned routing partition."""
 
 from __future__ import annotations
 
@@ -51,6 +51,7 @@ def main() -> None:
     block_size = int(config["data"]["block_size"])
 
     actions = Counter()
+    eligibility_partition = Counter()
     total = 0
     maximum_shared = 0
     maximum_option = 0
@@ -82,7 +83,7 @@ def main() -> None:
                     raise ValueError(f"unknown action: {record.expected_action}")
                 if unified.option_target != expected_target:
                     raise ValueError(f"wrong option target: {record.record_id}")
-                supported = tuple(
+                eligible = tuple(
                     index
                     for index, valid in enumerate(
                         unified.option_valid_mask[:MAX_CANDIDATES]
@@ -90,20 +91,49 @@ def main() -> None:
                     if valid
                 )
                 if record.expected_action == RESOLVE_ACTION:
-                    expected_supported = (record.selected_candidate_index,)
-                else:
-                    expected_supported = ()
-                if supported != expected_supported:
+                    if not eligible or record.selected_candidate_index not in eligible:
+                        raise ValueError(
+                            f"selected candidate is not evidence-eligible: "
+                            f"{record.record_id}; eligible={eligible}"
+                        )
+                elif record.expected_action == GENERATE_ACTION and eligible:
                     raise ValueError(
-                        f"wrong supported candidates: {record.record_id}; "
-                        f"expected={expected_supported}, actual={supported}"
+                        f"generate row has evidence-eligible candidates: "
+                        f"{record.record_id}; eligible={eligible}"
                     )
                 sentinel_valid = unified.option_valid_mask[NO_SUPPORT_OPTION_INDEX]
-                expected_sentinel = record.expected_action == CLARIFY_ACTION
+                expected_sentinel = record.expected_action != GENERATE_ACTION
                 if sentinel_valid != expected_sentinel:
                     raise ValueError(f"wrong sentinel mask: {record.record_id}")
+                if record.skill == "scene_route" and (
+                    record.expected_action == RESOLVE_ACTION
+                    or (
+                        record.expected_action == CLARIFY_ACTION
+                        and record.case == "missing_evidence"
+                    )
+                ):
+                    expected_eligible_count = 2
+                elif record.expected_action == RESOLVE_ACTION:
+                    expected_eligible_count = 1
+                else:
+                    expected_eligible_count = 0
+                if len(eligible) != expected_eligible_count:
+                    raise ValueError(
+                        f"unexpected eligibility partition: {record.record_id}; "
+                        f"expected_count={expected_eligible_count}, "
+                        f"eligible={eligible}"
+                    )
                 total += 1
                 actions[record.expected_action] += 1
+                eligibility_partition[
+                    (
+                        dataset_name,
+                        split,
+                        record.skill,
+                        record.expected_action,
+                        len(eligible),
+                    )
+                ] += 1
                 maximum_shared = max(maximum_shared, unified.sequence_tokens)
                 maximum_option = max(
                     maximum_option, *unified.option_view_sequence_tokens
@@ -111,9 +141,16 @@ def main() -> None:
             print(f"{dataset_name}/{split}: {len(records):,} rows passed")
     print(f"total rows: {total:,}")
     print(f"actions: {dict(sorted(actions.items()))}")
+    print("eligibility partition:")
+    for key, count in sorted(eligibility_partition.items()):
+        dataset_name, split, skill, action, eligible_count = key
+        print(
+            f"- {dataset_name}/{split}/{skill}/{action}: "
+            f"eligible={eligible_count}, rows={count:,}"
+        )
     print(f"maximum shared tokens: {maximum_shared:,}/{block_size:,}")
     print(f"maximum option-view tokens: {maximum_option:,}/{block_size:,}")
-    print("support masks: exactly one selected span or no-support sentinel")
+    print("routing partition: zero->clarify, one->resolve, two-plus->action head")
     print("Phase 32 shared and real-candidate encodings preserved exactly")
 
 

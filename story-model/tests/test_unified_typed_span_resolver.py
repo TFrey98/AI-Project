@@ -23,7 +23,8 @@ from story_model.unified_typed_span_resolver import (
     NO_SUPPORT_OPTION_INDEX,
     STRUCTURED_MODE,
     UnifiedTypedSpanResolver,
-    candidate_is_supported,
+    candidate_is_evidence_eligible,
+    count_conditioned_option_logits,
     encode_unified_records,
     realize_unified_decision,
     summarize_unified_predictions,
@@ -127,17 +128,17 @@ def test_encoding_preserves_phase32_inputs_and_real_candidate_views():
     assert unified[2].option_target == -100
     assert unified[0].mode_target == MODE_TO_INDEX[STRUCTURED_MODE]
     assert unified[2].mode_target == MODE_TO_INDEX[GENERATE_MODE]
-    assert unified[0].option_valid_mask == (True, False, False, False, False)
+    assert unified[0].option_valid_mask == (True, False, False, False, True)
     assert unified[1].option_valid_mask == (False, False, False, False, True)
     assert unified[2].option_valid_mask == (False, False, False, False, False)
 
 
-def test_runtime_support_mask_rejects_absent_wrong_type_and_substrings():
+def test_evidence_eligibility_rejects_absent_wrong_type_and_substrings():
     resolve, clarify, _ = _records()
-    assert candidate_is_supported(resolve, 0)
-    assert not candidate_is_supported(resolve, 1)
+    assert candidate_is_evidence_eligible(resolve, 0)
+    assert not candidate_is_evidence_eligible(resolve, 1)
     assert not any(
-        candidate_is_supported(clarify, index)
+        candidate_is_evidence_eligible(clarify, index)
         for index in range(len(clarify.candidates))
     )
 
@@ -173,11 +174,11 @@ def test_runtime_support_mask_rejects_absent_wrong_type_and_substrings():
         expected_value="record",
         alternative_value=None,
     )
-    assert not candidate_is_supported(wrong_type, 0)
-    assert not candidate_is_supported(substring, 0)
+    assert not candidate_is_evidence_eligible(wrong_type, 0)
+    assert not candidate_is_evidence_eligible(substring, 0)
 
 
-def test_multiple_supported_candidates_remain_available_for_ranking():
+def test_multiple_eligible_candidates_remain_available_for_ranking():
     record = ExpandedResolverRecord(
         record_id="ambiguous-support",
         source_context_id="ambiguous-support",
@@ -203,10 +204,73 @@ def test_multiple_supported_candidates_remain_available_for_ranking():
     tokenizer = _tokenizer((record,))
     encoded = encode_unified_records((record,), tokenizer, 256)[0]
 
-    assert encoded.option_valid_mask == (True, True, False, False, False)
+    assert encoded.option_valid_mask == (True, True, False, False, True)
 
 
-def test_no_support_view_exposes_marker_only_when_candidate_is_supported():
+def test_scene_route_clarify_keeps_sentinel_with_two_eligible_candidates():
+    record = ExpandedResolverRecord(
+        record_id="scene-route-clarify",
+        source_context_id="scene-route-clarify",
+        conversation_id="scene-route-clarify",
+        split="train",
+        skill="scene_route",
+        case="missing_evidence",
+        prompt=(
+            "Two routes are available: the east sally port and the quarry road. "
+            "Which route should we take?"
+        ),
+        expected_action=CLARIFY_ACTION,
+        expected_type="route",
+        candidates=(
+            ExpandedCandidate("quarry road", "route"),
+            ExpandedCandidate("east sally port", "route"),
+        ),
+        selected_candidate_index=None,
+        response_template=CLARIFICATION_RESPONSE,
+        expected_value="quarry road",
+        alternative_value="east sally port",
+        source_phase="phase31",
+    )
+    tokenizer = _tokenizer((record,))
+    encoded = encode_unified_records((record,), tokenizer, 256)[0]
+
+    assert encoded.option_target == NO_SUPPORT_OPTION_INDEX
+    assert encoded.option_valid_mask == (True, True, False, False, True)
+
+
+def test_count_conditioned_router_implements_zero_one_two_plus_partition():
+    raw = torch.tensor(
+        [
+            [8.0, 7.0, 6.0, 5.0, -9.0],
+            [8.0, 7.0, 6.0, 5.0, 99.0],
+            [1.0, 3.0, 6.0, 5.0, 99.0],
+            [1.0, 3.0, 6.0, 5.0, -99.0],
+        ]
+    )
+    valid = torch.tensor(
+        [
+            [False, False, False, False, True],
+            [False, False, True, False, True],
+            [True, True, False, False, True],
+            [True, True, False, False, True],
+        ]
+    )
+    legacy = torch.tensor(
+        [
+            [9.0, 1.0, 0.0],
+            [1.0, 99.0, 0.0],
+            [4.0, 1.0, 0.0],
+            [1.0, 4.0, 0.0],
+        ]
+    )
+
+    logits, eligible_counts = count_conditioned_option_logits(raw, valid, legacy)
+
+    assert eligible_counts.tolist() == [0, 1, 2, 2]
+    assert logits.argmax(dim=-1).tolist() == [4, 2, 1, 4]
+
+
+def test_no_support_view_exposes_marker_only_when_candidate_is_eligible():
     records = _records()
     tokenizer = _tokenizer(records)
     encoded = encode_unified_records(records[:2], tokenizer, 256)
@@ -253,10 +317,68 @@ def test_forward_scores_four_candidates_plus_sentinel_with_finite_losses():
     ).min
     assert output.legacy_action_logits.shape == (3, 3)
     assert output.mode_loss is not None and torch.isfinite(output.mode_loss)
-    assert output.option_loss is not None and torch.isfinite(output.option_loss)
+    assert torch.allclose(
+        output.mode_loss,
+        torch.nn.functional.cross_entropy(output.mode_logits, batch[5]),
+    )
+    assert output.ambiguity_action_loss is None
     assert output.raw_candidate_loss is not None
     assert torch.isfinite(output.raw_candidate_loss)
     assert output.loss is not None and torch.isfinite(output.loss)
+
+
+def test_ambiguity_action_loss_is_scoped_to_multi_eligible_rows():
+    resolve = ExpandedResolverRecord(
+        record_id="multi-resolve",
+        source_context_id="multi",
+        conversation_id="multi",
+        split="train",
+        skill="scene_route",
+        case="supported",
+        prompt=(
+            "Routes: quarry road and east sally port. "
+            "The east sally port is guarded."
+        ),
+        expected_action=RESOLVE_ACTION,
+        expected_type="route",
+        candidates=(
+            ExpandedCandidate("quarry road", "route"),
+            ExpandedCandidate("east sally port", "route"),
+        ),
+        selected_candidate_index=0,
+        response_template="Take <|resolved_value|>.",
+        expected_value="quarry road",
+        alternative_value="east sally port",
+        source_phase="phase31",
+    )
+    clarify = ExpandedResolverRecord(
+        **{
+            **resolve.__dict__,
+            "record_id": "multi-clarify",
+            "conversation_id": "multi-clarify",
+            "case": "missing_evidence",
+            "prompt": "Routes: quarry road and east sally port.",
+            "expected_action": CLARIFY_ACTION,
+            "selected_candidate_index": None,
+            "response_template": CLARIFICATION_RESPONSE,
+        }
+    )
+    tokenizer = _tokenizer((resolve, clarify))
+    examples = encode_unified_records((resolve, clarify), tokenizer, 256)
+    model = UnifiedTypedSpanResolver(_backbone(tokenizer))
+    batch = unified_batch(examples, range(2), "cpu")
+
+    output = model(*batch[:5], batch[5], batch[6], batch[7])
+
+    assert output.ambiguity_action_loss is not None
+    assert torch.isfinite(output.ambiguity_action_loss)
+    assert torch.allclose(
+        output.ambiguity_action_loss,
+        torch.nn.functional.cross_entropy(
+            output.legacy_action_logits[:, :2],
+            torch.tensor([0, 1]),
+        ),
+    )
 
 
 def test_realization_maps_real_sentinel_and_generate_options():
@@ -288,6 +410,8 @@ def test_summary_reports_routing_and_oracle_candidate_metrics():
             "skill": "multi_turn_memory",
             "case": "supported",
             "candidate_count": 4,
+            "eligible_candidate_count": 2,
+            "multi_candidate_action_correct": True,
             "expected_action": RESOLVE_ACTION,
             "action_correct": True,
             "candidate_correct": True,
@@ -306,6 +430,8 @@ def test_summary_reports_routing_and_oracle_candidate_metrics():
             "skill": "multi_turn_memory",
             "case": "supported",
             "candidate_count": 4,
+            "eligible_candidate_count": 2,
+            "multi_candidate_action_correct": True,
             "expected_action": RESOLVE_ACTION,
             "action_correct": True,
             "candidate_correct": True,
@@ -324,6 +450,8 @@ def test_summary_reports_routing_and_oracle_candidate_metrics():
             "skill": "multi_turn_memory",
             "case": "missing_evidence",
             "candidate_count": 4,
+            "eligible_candidate_count": 2,
+            "multi_candidate_action_correct": True,
             "expected_action": CLARIFY_ACTION,
             "action_correct": True,
             "candidate_correct": False,
@@ -342,6 +470,8 @@ def test_summary_reports_routing_and_oracle_candidate_metrics():
             "skill": "multi_turn_memory",
             "case": "ordinary_generation",
             "candidate_count": 0,
+            "eligible_candidate_count": 0,
+            "multi_candidate_action_correct": True,
             "expected_action": GENERATE_ACTION,
             "action_correct": True,
             "candidate_correct": False,
@@ -361,6 +491,8 @@ def test_summary_reports_routing_and_oracle_candidate_metrics():
     assert summary["real_candidate_top1_accuracy"] == 1.0
     assert summary["clarify_sentinel_accuracy"] == 1.0
     assert summary["no_support_false_positive_rate"] == 0.0
+    assert summary["multi_candidate_action_examples"] == 3
+    assert summary["multi_candidate_action_accuracy"] == 1.0
     assert summary["per_skill_candidate_width"]["multi_turn_memory"]["4"][
         "real_candidate_top1_accuracy"
     ] == 1.0

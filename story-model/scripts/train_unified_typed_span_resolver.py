@@ -1,4 +1,4 @@
-"""Train support-constrained unified resolve/clarify routing."""
+"""Train count-conditioned unified resolve/clarify routing."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ import yaml
 from story_model.checkpoint import read_checkpoint, save_checkpoint
 from story_model.data import ByteBPETokenizer, tokenizer_from_dict
 from story_model.expanded_typed_span_resolver import (
+    ACTION_TO_INDEX,
+    CLARIFY_ACTION,
     EXPANDED_CONTROL_TOKENS,
     RESOLVE_ACTION,
     load_expanded_records,
@@ -109,8 +111,8 @@ def _evaluate(
     model.eval()
     mode_loss_sum = 0.0
     mode_loss_total = 0
-    option_loss_sum = 0.0
-    option_loss_total = 0
+    ambiguity_action_loss_sum = 0.0
+    ambiguity_action_loss_total = 0
     raw_candidate_loss_sum = 0.0
     raw_candidate_loss_total = 0
     mode_correct = 0
@@ -121,6 +123,8 @@ def _evaluate(
     resolve_total = 0
     clarify_sentinel_correct = 0
     clarify_total = 0
+    multi_action_correct = 0
+    multi_action_total = 0
     total = 0
     for start in range(0, len(indices), batch_size):
         batch_indices = indices[start : start + batch_size]
@@ -131,10 +135,14 @@ def _evaluate(
             mode_loss_sum += float(output.mode_loss) * len(batch_indices)
             mode_loss_total += len(batch_indices)
         structured = batch[6] != -100
-        structured_count = int(structured.sum())
-        if output.option_loss is not None:
-            option_loss_sum += float(output.option_loss) * structured_count
-            option_loss_total += structured_count
+        eligible_counts = batch[4][:, :NO_SUPPORT_OPTION_INDEX].sum(dim=-1)
+        multi_eligible = structured & (eligible_counts >= 2)
+        multi_count = int(multi_eligible.sum())
+        if output.ambiguity_action_loss is not None:
+            ambiguity_action_loss_sum += (
+                float(output.ambiguity_action_loss) * multi_count
+            )
+            ambiguity_action_loss_total += multi_count
         modes = output.mode_logits.argmax(dim=-1)
         options = output.option_logits.argmax(dim=-1)
         candidate_positions = torch.arange(
@@ -166,6 +174,19 @@ def _evaluate(
             device=device,
         )
         clarify = structured & ~resolve
+        expected_multi_actions = torch.where(
+            resolve,
+            torch.full_like(batch[6], ACTION_TO_INDEX[RESOLVE_ACTION]),
+            torch.full_like(batch[6], ACTION_TO_INDEX[CLARIFY_ACTION]),
+        )
+        predicted_multi_actions = output.legacy_action_logits[:, :2].argmax(dim=-1)
+        multi_action_total += multi_count
+        multi_action_correct += int(
+            (
+                multi_eligible
+                & (predicted_multi_actions == expected_multi_actions)
+            ).sum()
+        )
         resolve_total += int(resolve.sum())
         resolve_count = int(resolve.sum())
         if output.raw_candidate_loss is not None:
@@ -184,8 +205,8 @@ def _evaluate(
         total += len(batch_indices)
     model.train()
     loss = mode_loss_sum / mode_loss_total
-    if option_loss_total:
-        loss += option_loss_sum / option_loss_total
+    if ambiguity_action_loss_total:
+        loss += ambiguity_action_loss_sum / ambiguity_action_loss_total
     if raw_candidate_loss_total:
         loss += raw_candidate_loss_sum / raw_candidate_loss_total
     return {
@@ -203,6 +224,12 @@ def _evaluate(
         "clarify_sentinel_accuracy": (
             clarify_sentinel_correct / clarify_total if clarify_total else 0.0
         ),
+        "multi_candidate_action_accuracy": (
+            multi_action_correct / multi_action_total
+            if multi_action_total
+            else 1.0
+        ),
+        "multi_candidate_action_examples": multi_action_total,
     }
 
 
@@ -212,6 +239,7 @@ def _checkpoint_selection(
     structured_floor: float,
     resolve_option_floor: float,
     sentinel_floor: float,
+    multi_action_floor: float,
     mode_floor: float,
 ) -> tuple[bool, tuple[float, ...]]:
     """Rank eligible checkpoints by loss and reject Phase 31 regressions."""
@@ -222,6 +250,8 @@ def _checkpoint_selection(
         and phase31_metrics["raw_candidate_top1_accuracy"]
         >= resolve_option_floor
         and phase31_metrics["clarify_sentinel_accuracy"] >= sentinel_floor
+        and phase31_metrics["multi_candidate_action_accuracy"]
+        >= multi_action_floor
         and phase31_metrics["mode_accuracy"] >= mode_floor
     )
     if eligible:
@@ -232,6 +262,7 @@ def _checkpoint_selection(
             phase31_metrics["resolve_option_accuracy"],
             phase31_metrics["raw_candidate_top1_accuracy"],
             phase31_metrics["clarify_sentinel_accuracy"],
+            phase31_metrics["multi_candidate_action_accuracy"],
             phase31_metrics["mode_accuracy"],
         )
     else:
@@ -241,6 +272,7 @@ def _checkpoint_selection(
             phase31_metrics["resolve_option_accuracy"],
             phase31_metrics["raw_candidate_top1_accuracy"],
             phase31_metrics["clarify_sentinel_accuracy"],
+            phase31_metrics["multi_candidate_action_accuracy"],
             phase31_metrics["mode_accuracy"],
             -balanced_validation_loss,
         )
@@ -347,6 +379,9 @@ def main() -> None:
     phase31_sentinel_floor = float(
         train_config.get("phase31_sentinel_floor", 0.95)
     )
+    phase31_multi_action_floor = float(
+        train_config.get("phase31_multi_action_floor", 0.95)
+    )
     phase31_mode_floor = float(train_config.get("phase31_mode_floor", 0.98))
     if eval_batch_size < 1:
         raise ValueError("eval_batch_size must be positive")
@@ -354,6 +389,7 @@ def main() -> None:
         ("phase31_structured_floor", phase31_structured_floor),
         ("phase31_resolve_option_floor", phase31_resolve_option_floor),
         ("phase31_sentinel_floor", phase31_sentinel_floor),
+        ("phase31_multi_action_floor", phase31_multi_action_floor),
         ("phase31_mode_floor", phase31_mode_floor),
     ):
         if not 0.0 <= value <= 1.0:
@@ -391,7 +427,7 @@ def main() -> None:
     print(f"parameters: {sum(parameter.numel() for parameter in model.parameters()):,}")
     print(f"vocabulary: {tokenizer.vocab_size}")
     print(
-        "loss objective: generate_mode+support_masked_option"
+        "loss objective: generate_mode+multi_candidate_action"
         "+raw_candidate_ranking"
     )
     print(
@@ -414,6 +450,7 @@ def main() -> None:
         f"structured {phase31_structured_floor:.3f}, "
         f"resolve option {phase31_resolve_option_floor:.3f}, "
         f"sentinel {phase31_sentinel_floor:.3f}, "
+        f"multi-candidate action {phase31_multi_action_floor:.3f}, "
         f"mode {phase31_mode_floor:.3f}"
     )
 
@@ -469,6 +506,8 @@ def main() -> None:
             "Phase 31 raw candidate "
             f"{phase31_metrics['raw_candidate_top1_accuracy']:.3f}, "
             f"Phase 31 sentinel {phase31_metrics['clarify_sentinel_accuracy']:.3f}, "
+            "Phase 31 multi action "
+            f"{phase31_metrics['multi_candidate_action_accuracy']:.3f}, "
             f"Phase 31 mode {phase31_metrics['mode_accuracy']:.3f}, "
             f"Phase 32 sentinel {phase32_metrics['clarify_sentinel_accuracy']:.3f}"
         )
@@ -478,6 +517,7 @@ def main() -> None:
             phase31_structured_floor,
             phase31_resolve_option_floor,
             phase31_sentinel_floor,
+            phase31_multi_action_floor,
             phase31_mode_floor,
         )
         print(f"checkpoint eligible: {'yes' if eligible else 'no'}")

@@ -1,4 +1,4 @@
-"""Evaluate Phase 33b and re-run the complete Phase 31/32 regression gate."""
+"""Evaluate Phase 33c and re-run the complete Phase 31/32 regression gate."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def _load_model(path: Path, device: torch.device):
     if extra.get("architecture") != "unified_typed_span_resolver":
         raise ValueError("checkpoint is not a Phase 33 unified resolver")
     if extra.get("support_mask_version") != SUPPORT_MASK_VERSION:
-        raise ValueError("checkpoint predates the Phase 33b support mask")
+        raise ValueError("checkpoint predates the Phase 33c count router")
     config = extra.get("config")
     if not isinstance(config, dict):
         raise ValueError("checkpoint has no training config")
@@ -98,6 +98,27 @@ def evaluate_records(
             mode_index = mode_predictions[offset]
             option_index = option_predictions[offset]
             real_candidate_index = real_candidate_predictions[offset]
+            eligible_candidate_indices = [
+                position
+                for position, valid in enumerate(
+                    examples[index].option_valid_mask[:MAX_CANDIDATES]
+                )
+                if valid
+            ]
+            legacy_multi_action_index = int(
+                output.legacy_action_logits[offset, :2].argmax().item()
+            )
+            multi_candidate_action_correct = None
+            if (
+                len(eligible_candidate_indices) >= 2
+                and record.expected_action in (RESOLVE_ACTION, CLARIFY_ACTION)
+            ):
+                expected_multi_action_index = RESOLVER_ACTIONS.index(
+                    record.expected_action
+                )
+                multi_candidate_action_correct = (
+                    legacy_multi_action_index == expected_multi_action_index
+                )
             decision = realize_unified_decision(record, mode_index, option_index)
             # Report the guarded runtime action.  A malformed structured choice
             # must fail closed to clarification rather than appear as resolve.
@@ -159,16 +180,17 @@ def evaluate_records(
                     "expected_candidate_index": record.selected_candidate_index,
                     "predicted_option_index": option_index,
                     "predicted_real_candidate_index": real_candidate_index,
-                    "supported_candidate_indices": [
-                        position
-                        for position, valid in enumerate(
-                            examples[index].option_valid_mask[:MAX_CANDIDATES]
-                        )
-                        if valid
-                    ],
+                    "eligible_candidate_indices": eligible_candidate_indices,
+                    "eligible_candidate_count": len(eligible_candidate_indices),
                     "legacy_predicted_action": RESOLVER_ACTIONS[
                         legacy_predictions[offset]
                     ],
+                    "multi_candidate_predicted_action": RESOLVER_ACTIONS[
+                        legacy_multi_action_index
+                    ],
+                    "multi_candidate_action_correct": (
+                        multi_candidate_action_correct
+                    ),
                     "expected_value": record.expected_value,
                     "alternative_value": record.alternative_value,
                     "selected_value": decision.selected_value,
@@ -262,6 +284,7 @@ def main() -> None:
                 f"{label}: resolve={metrics['end_to_end_resolve_accuracy']:.3f}, "
                 f"pairs={metrics['counterfactual_pair_resolve_accuracy']:.3f}, "
                 f"candidate={metrics['real_candidate_top1_accuracy']:.3f}, "
+                f"multi_action={metrics['multi_candidate_action_accuracy']:.3f}, "
                 f"sentinel={metrics['clarify_sentinel_accuracy']:.3f}, "
                 f"generate={metrics['generate_accuracy']:.3f}, "
                 f"missing={metrics['value_missing_rate']:.3f}, "

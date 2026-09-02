@@ -55,10 +55,11 @@ train:
   phase31_structured_floor: 0.95
   phase31_resolve_option_floor: 0.995
   phase31_sentinel_floor: 0.95
+  phase31_multi_action_floor: 0.95
   phase31_mode_floor: 0.98
   early_stopping_patience: 8
   device: auto
 
 checkpoint:
-  dir: checkpoints/support_constrained_unified_typed_span_resolver_pilot
+  dir: checkpoints/count_conditioned_unified_typed_span_resolver_pilot
   save_interval: 100

@@ -15,6 +15,8 @@ def _metrics(skill: str, widths: tuple[str, ...]):
         "value_missing_rate": 0.0,
         "wrong_alternative_rate": 0.0,
         "no_support_false_positive_rate": 0.0,
+        "multi_candidate_action_examples": 0,
+        "multi_candidate_action_accuracy": 1.0,
     }
     return {
         **base,
@@ -58,5 +60,34 @@ def test_phase33_gate_rejects_hidden_real_candidate_regression():
     assert any(
         "phase32/lexical/multi_turn_memory/width-4" in failure
         and "real_candidate_top1_accuracy" in failure
+        for failure in failures
+    )
+
+
+def test_phase33_gate_rejects_multi_candidate_action_regression():
+    summary = deepcopy(_summary())
+    metrics = summary["phase31_regression"]["splits"]["lexical"]
+    metrics["multi_candidate_action_examples"] = 100
+    metrics["multi_candidate_action_accuracy"] = 0.94
+
+    failures = gate_failures(summary)
+
+    assert any(
+        "phase31_regression/lexical" in failure
+        and "multi_candidate_action_accuracy" in failure
+        for failure in failures
+    )
+
+
+def test_phase33_gate_rejects_summary_without_multi_action_diagnostics():
+    summary = deepcopy(_summary())
+    metrics = summary["phase31_regression"]["splits"]["lexical"]
+    del metrics["multi_candidate_action_examples"]
+
+    failures = gate_failures(summary)
+
+    assert any(
+        "phase31_regression/lexical" in failure
+        and "multi_candidate_action_examples" in failure
         for failure in failures
     )
