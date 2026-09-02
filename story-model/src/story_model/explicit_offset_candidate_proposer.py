@@ -41,6 +41,7 @@ from story_model.unified_typed_span_resolver import (
 
 
 EXPLICIT_OFFSET_PROPOSER_VERSION = 1
+BOUNDARY_OBJECTIVE_VERSION = 1
 PROPOSAL_TYPES = tuple(sorted(set(SKILL_VALUE_TYPES.values())))
 TYPE_TO_INDEX = {value_type: index for index, value_type in enumerate(PROPOSAL_TYPES)}
 OUTSIDE_TAG = 0
@@ -326,6 +327,84 @@ def proposal_batch(
 class CandidateProposerOutput:
     tag_logits: torch.Tensor
     loss: Optional[torch.Tensor]
+    tag_loss: Optional[torch.Tensor] = None
+    boundary_start_loss: Optional[torch.Tensor] = None
+    boundary_end_loss: Optional[torch.Tensor] = None
+    boundary_loss: Optional[torch.Tensor] = None
+    boundary_start_positions: int = 0
+    boundary_end_positions: int = 0
+
+
+@dataclass
+class BoundaryAuxiliaryLosses:
+    start_loss: torch.Tensor
+    end_loss: torch.Tensor
+    combined_loss: torch.Tensor
+    start_positions: int
+    end_positions: int
+
+
+def boundary_auxiliary_losses(
+    tag_logits: torch.Tensor,
+    tag_targets: torch.Tensor,
+) -> BoundaryAuxiliaryLosses:
+    """Compute unweighted CE at gold span starts and immediate ends."""
+
+    if tag_targets.shape != tag_logits.shape[:-1]:
+        raise ValueError("tag targets must match byte-logit positions")
+    start_logits = []
+    start_targets = []
+    end_logits = []
+    end_targets = []
+    for batch_index in range(len(tag_targets)):
+        supervised = tag_targets[batch_index] != IGNORE_TAG
+        sequence_targets = tag_targets[batch_index][supervised]
+        sequence_logits = tag_logits[batch_index][supervised]
+        if not len(sequence_targets):
+            continue
+        starts = (sequence_targets > OUTSIDE_TAG) & (
+            (sequence_targets - 1).remainder(2) == 0
+        )
+        if bool(starts.any()):
+            start_logits.append(sequence_logits[starts])
+            start_targets.append(sequence_targets[starts])
+        if len(sequence_targets) > 1:
+            ends = (
+                (sequence_targets[:-1] > OUTSIDE_TAG)
+                & (sequence_targets[1:] == OUTSIDE_TAG)
+            )
+            if bool(ends.any()):
+                end_logits.append(sequence_logits[1:][ends])
+                end_targets.append(sequence_targets[1:][ends])
+
+    zero = tag_logits[..., 0].reshape(-1)[0] * 0.0
+    start_positions = sum(len(targets) for targets in start_targets)
+    end_positions = sum(len(targets) for targets in end_targets)
+    start_loss = (
+        F.cross_entropy(torch.cat(start_logits), torch.cat(start_targets))
+        if start_positions
+        else zero
+    )
+    end_loss = (
+        F.cross_entropy(torch.cat(end_logits), torch.cat(end_targets))
+        if end_positions
+        else zero
+    )
+    components = []
+    if start_positions:
+        components.append(start_loss)
+    if end_positions:
+        components.append(end_loss)
+    combined_loss = (
+        torch.stack(components).mean() if components else zero
+    )
+    return BoundaryAuxiliaryLosses(
+        start_loss=start_loss,
+        end_loss=end_loss,
+        combined_loss=combined_loss,
+        start_positions=start_positions,
+        end_positions=end_positions,
+    )
 
 
 @dataclass(frozen=True)
@@ -411,7 +490,10 @@ class ExplicitOffsetCandidateProposer(nn.Module):
         sequence_lengths: torch.Tensor,
         prompt_token_counts: torch.Tensor,
         tag_targets: Optional[torch.Tensor] = None,
+        boundary_loss_weight: float = 0.0,
     ) -> CandidateProposerOutput:
+        if boundary_loss_weight < 0.0:
+            raise ValueError("boundary loss weight cannot be negative")
         del prompt_token_counts
         self.resolver.eval()
         with torch.no_grad():
@@ -434,16 +516,38 @@ class ExplicitOffsetCandidateProposer(nn.Module):
             torch.finfo(tag_logits.dtype).min,
         )
         loss = None
+        tag_loss = None
+        boundary_start_loss = None
+        boundary_end_loss = None
+        boundary_loss = None
+        boundary_start_positions = 0
+        boundary_end_positions = 0
         if tag_targets is not None:
             if tag_targets.shape != tag_logits.shape[:-1]:
                 raise ValueError("tag targets must match byte-logit positions")
-            loss = F.cross_entropy(
+            tag_loss = F.cross_entropy(
                 tag_logits.reshape(-1, tag_logits.shape[-1]),
                 tag_targets.reshape(-1),
                 weight=self.tag_class_weights.to(dtype=tag_logits.dtype),
                 ignore_index=IGNORE_TAG,
             )
-        return CandidateProposerOutput(tag_logits=tag_logits, loss=loss)
+            boundary = boundary_auxiliary_losses(tag_logits, tag_targets)
+            boundary_start_loss = boundary.start_loss
+            boundary_end_loss = boundary.end_loss
+            boundary_loss = boundary.combined_loss
+            boundary_start_positions = boundary.start_positions
+            boundary_end_positions = boundary.end_positions
+            loss = tag_loss + boundary_loss_weight * boundary_loss
+        return CandidateProposerOutput(
+            tag_logits=tag_logits,
+            loss=loss,
+            tag_loss=tag_loss,
+            boundary_start_loss=boundary_start_loss,
+            boundary_end_loss=boundary_end_loss,
+            boundary_loss=boundary_loss,
+            boundary_start_positions=boundary_start_positions,
+            boundary_end_positions=boundary_end_positions,
+        )
 
 
 def decode_proposed_spans(

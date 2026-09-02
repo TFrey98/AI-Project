@@ -1,4 +1,4 @@
-"""Train the Phase 34 explicit-offset candidate proposer."""
+"""Train the Phase 34 proposer, optionally with Phase 34d boundary loss."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from pathlib import Path
 
 import torch
 import yaml
+from torch.nn import functional as F
 
 from story_model.checkpoint import read_checkpoint, save_checkpoint
 from story_model.data import ByteBPETokenizer, tokenizer_from_dict
@@ -18,6 +19,7 @@ from story_model.expanded_typed_span_resolver import (
     load_expanded_records,
 )
 from story_model.explicit_offset_candidate_proposer import (
+    BOUNDARY_OBJECTIVE_VERSION,
     EXCLUDED_PROPOSER_CASES,
     EXPLICIT_OFFSET_PROPOSER_VERSION,
     ExplicitOffsetCandidateProposer,
@@ -36,6 +38,20 @@ from story_model.unified_typed_span_resolver import (
     SUPPORT_MASK_VERSION,
     UnifiedTypedSpanResolver,
 )
+try:
+    from scripts.phase34c_tag_confusion_decision import (
+        add_tag_sequence,
+        new_tag_audit,
+        summarize_tag_audit,
+    )
+except ModuleNotFoundError as error:
+    if error.name != "scripts":
+        raise
+    from phase34c_tag_confusion_decision import (  # type: ignore[no-redef]
+        add_tag_sequence,
+        new_tag_audit,
+        summarize_tag_audit,
+    )
 
 
 def _load_config(path: Path) -> dict:
@@ -50,6 +66,11 @@ def _load_config(path: Path) -> dict:
         EXPANDED_CONTROL_TOKENS
     ):
         raise ValueError("Phase 34 must preserve the Phase 33c tokenizer")
+    boundary_loss_weight = float(
+        config.get("train", {}).get("boundary_loss_weight", 0.0)
+    )
+    if boundary_loss_weight < 0.0 or not math.isfinite(boundary_loss_weight):
+        raise ValueError("boundary_loss_weight must be finite and nonnegative")
     return config
 
 
@@ -120,11 +141,18 @@ def _evaluate(
     tokenizer,
     batch_size,
     device,
+    boundary_loss_weight,
 ) -> dict:
     model.eval()
     loss_sum = 0.0
     loss_total = 0
+    tag_loss_sum = 0.0
+    start_loss_sum = 0.0
+    start_positions = 0
+    end_loss_sum = 0.0
+    end_positions = 0
     rows = []
+    tag_audit = new_tag_audit()
     for start in range(0, len(indices), batch_size):
         batch_indices = indices[start : start + batch_size]
         batch = proposal_batch(
@@ -134,13 +162,40 @@ def _evaluate(
             model.source_width,
             device,
         )
-        output = model(*batch)
+        output = model(*batch, boundary_loss_weight=boundary_loss_weight)
         assert output.loss is not None
         supervised = int((batch[3] != -100).sum())
         loss_sum += float(output.loss) * supervised
         loss_total += supervised
+        assert output.tag_loss is not None
+        assert output.boundary_start_loss is not None
+        assert output.boundary_end_loss is not None
+        tag_loss_sum += float(output.tag_loss) * supervised
+        start_loss_sum += (
+            float(output.boundary_start_loss)
+            * output.boundary_start_positions
+        )
+        start_positions += output.boundary_start_positions
+        end_loss_sum += (
+            float(output.boundary_end_loss) * output.boundary_end_positions
+        )
+        end_positions += output.boundary_end_positions
         logits = output.tag_logits.detach().cpu()
+        targets = batch[3].detach().cpu()
         for offset, index in enumerate(batch_indices):
+            supervised_mask = targets[offset] != -100
+            byte_logits = logits[offset][supervised_mask].float()
+            byte_targets = targets[offset][supervised_mask]
+            byte_predictions = byte_logits.argmax(dim=-1)
+            byte_nll = F.cross_entropy(
+                byte_logits, byte_targets, reduction="none"
+            )
+            add_tag_sequence(
+                tag_audit,
+                byte_targets.tolist(),
+                byte_predictions.tolist(),
+                byte_nll.tolist(),
+            )
             predicted = decode_proposed_spans(
                 records[index].prompt,
                 examples[index],
@@ -154,6 +209,34 @@ def _evaluate(
             )
     metrics = proposal_metrics(rows)
     metrics["loss"] = loss_sum / loss_total if loss_total else 0.0
+    metrics["tag_loss"] = tag_loss_sum / loss_total if loss_total else 0.0
+    metrics["boundary_start_loss"] = (
+        start_loss_sum / start_positions if start_positions else 0.0
+    )
+    metrics["boundary_end_loss"] = (
+        end_loss_sum / end_positions if end_positions else 0.0
+    )
+    boundary_components = []
+    if start_positions:
+        boundary_components.append(metrics["boundary_start_loss"])
+    if end_positions:
+        boundary_components.append(metrics["boundary_end_loss"])
+    metrics["boundary_loss"] = (
+        sum(boundary_components) / len(boundary_components)
+        if boundary_components
+        else 0.0
+    )
+    metrics["boundary_start_positions"] = start_positions
+    metrics["boundary_end_positions"] = end_positions
+    tag_metrics = summarize_tag_audit(tag_audit)
+    for name in (
+        "gold_outside_as_inside_rate",
+        "gold_begin_as_inside_rate",
+        "pre_start_bleed_rate",
+        "end_spill_rate",
+        "positive_type_accuracy",
+    ):
+        metrics[name] = tag_metrics[name]
     model.train()
     return metrics
 
@@ -277,6 +360,9 @@ def main() -> None:
     recall_floor = float(train_config.get("span_recall_floor", 0.98))
     answer_floor = float(train_config.get("answer_candidate_floor", 0.995))
     type_floor = float(train_config.get("type_accuracy_floor", 0.99))
+    boundary_loss_weight = float(
+        train_config.get("boundary_loss_weight", 0.0)
+    )
     checkpoint_dir = Path(config["checkpoint"]["dir"])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -297,6 +383,10 @@ def main() -> None:
         "manifest": manifests,
         "parent_phase33_checkpoint": str(args.warm_start),
         "parent_phase33_step": checkpoint.get("step", 0),
+        "boundary_objective_version": (
+            BOUNDARY_OBJECTIVE_VERSION if boundary_loss_weight else None
+        ),
+        "boundary_loss_weight": boundary_loss_weight,
         "excluded_proposer_cases": list(EXCLUDED_PROPOSER_CASES),
         **training_fingerprints(tokenizer.to_dict(), manifests),
     }
@@ -310,7 +400,12 @@ def main() -> None:
     print("frozen architecture parameters: backbone, action_head, candidate_score")
     print("new architecture parameters: " + ", ".join(trainable_names))
     print(f"proposal byte width: {model.source_width}")
-    print("loss objective: typed_byte_BIO")
+    if boundary_loss_weight:
+        print("loss objective: typed_byte_BIO+boundary_transition")
+        print(f"boundary loss weight: {boundary_loss_weight:g}")
+        print("boundary terms: gold_begin + first_gold_outside_after_span")
+    else:
+        print("loss objective: typed_byte_BIO")
     print("excluded proposer cases: wrong_type (retained in oracle gate)")
     print(
         f"training examples: {len(train_examples):,} "
@@ -338,6 +433,7 @@ def main() -> None:
             tokenizer,
             eval_batch_size,
             device,
+            boundary_loss_weight,
         )
         val_metrics = _evaluate(
             model,
@@ -347,6 +443,7 @@ def main() -> None:
             tokenizer,
             eval_batch_size,
             device,
+            boundary_loss_weight,
         )
         eligible, selection_key = _selection(
             val_metrics,
@@ -359,6 +456,10 @@ def main() -> None:
         print(
             f"update {step}: train loss {train_metrics['loss']:.4f}, "
             f"val loss {val_metrics['loss']:.4f}, "
+            f"start loss {val_metrics['boundary_start_loss']:.4f}, "
+            f"end loss {val_metrics['boundary_end_loss']:.4f}, "
+            f"B->I {val_metrics['gold_begin_as_inside_rate']:.3f}, "
+            f"end spill {val_metrics['end_spill_rate']:.3f}, "
             f"span precision {val_metrics['exact_span_precision']:.3f}, "
             f"span recall {val_metrics['exact_span_recall']:.3f}, "
             f"answer recall {val_metrics['answer_candidate_recall']:.3f}, "
@@ -425,6 +526,11 @@ def main() -> None:
         set_learning_rate(optimizer, learning_rate)
         optimizer.zero_grad(set_to_none=True)
         accumulated_loss = 0.0
+        accumulated_tag_loss = 0.0
+        accumulated_start_loss = 0.0
+        accumulated_end_loss = 0.0
+        accumulated_start_positions = 0
+        accumulated_end_positions = 0
         for _ in range(accumulation):
             batch = _balanced_batch(
                 phase31_train_examples,
@@ -434,9 +540,21 @@ def main() -> None:
                 model.source_width,
                 device,
             )
-            output = model(*batch)
+            output = model(
+                *batch, boundary_loss_weight=boundary_loss_weight
+            )
             assert output.loss is not None
+            assert output.tag_loss is not None
+            assert output.boundary_start_loss is not None
+            assert output.boundary_end_loss is not None
             accumulated_loss += float(output.loss.detach())
+            accumulated_tag_loss += float(output.tag_loss.detach())
+            accumulated_start_loss += float(
+                output.boundary_start_loss.detach()
+            )
+            accumulated_end_loss += float(output.boundary_end_loss.detach())
+            accumulated_start_positions += output.boundary_start_positions
+            accumulated_end_positions += output.boundary_end_positions
             (output.loss / accumulation).backward()
         gradient_norm = torch.nn.utils.clip_grad_norm_(
             tuple(model.proposer_parameters()), clip
@@ -446,6 +564,11 @@ def main() -> None:
         if step % log_interval == 0:
             print(
                 f"step {step}: loss {accumulated_loss / accumulation:.4f}, "
+                f"tag {accumulated_tag_loss / accumulation:.4f}, "
+                f"start {accumulated_start_loss / accumulation:.4f}, "
+                f"end {accumulated_end_loss / accumulation:.4f}, "
+                f"boundary positions "
+                f"{accumulated_start_positions}/{accumulated_end_positions}, "
                 f"lr {learning_rate:.6g}, grad {float(gradient_norm):.4f}"
             )
         if step % eval_interval == 0 and evaluate_and_save(step):

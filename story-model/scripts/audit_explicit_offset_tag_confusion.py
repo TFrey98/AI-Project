@@ -209,6 +209,12 @@ def main() -> None:
         "checkpoint_eligible": checkpoint.get("extra", {}).get(
             "checkpoint_eligible"
         ),
+        "checkpoint_boundary_objective_version": checkpoint.get(
+            "extra", {}
+        ).get("boundary_objective_version"),
+        "checkpoint_boundary_loss_weight": checkpoint.get("extra", {}).get(
+            "boundary_loss_weight", 0.0
+        ),
         "device": str(device),
         "decoder_policy": "unchanged_permissive",
         "training_changes": "none",

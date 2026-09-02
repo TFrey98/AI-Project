@@ -12,6 +12,7 @@ from story_model.expanded_typed_span_resolver import (
     ExpandedResolverRecord,
 )
 from story_model.explicit_offset_candidate_proposer import (
+    BOUNDARY_OBJECTIVE_VERSION,
     IGNORE_TAG,
     OUTSIDE_TAG,
     PERMISSIVE_DECODE_POLICY,
@@ -20,6 +21,7 @@ from story_model.explicit_offset_candidate_proposer import (
     EvidenceSpan,
     ExplicitOffsetCandidateProposer,
     begin_tag,
+    boundary_auxiliary_losses,
     decode_proposal_result,
     decode_proposed_spans,
     encode_proposal_record,
@@ -333,6 +335,88 @@ def test_proposer_freezes_resolver_and_computes_finite_loss():
         "proposal_tag.weight",
         "proposal_tag.bias",
     }
+
+
+def test_boundary_auxiliary_loss_supervises_only_gold_starts_and_ends():
+    class_count = 1 + 2 * len(PROPOSAL_TYPES)
+    logits = torch.zeros(1, 1, 7, class_count, requires_grad=True)
+    targets = torch.tensor(
+        [[[OUTSIDE_TAG, begin_tag("container"), inside_tag("container"),
+           OUTSIDE_TAG, begin_tag("person"), inside_tag("person"),
+           OUTSIDE_TAG]]]
+    )
+
+    boundary = boundary_auxiliary_losses(logits, targets)
+
+    assert BOUNDARY_OBJECTIVE_VERSION == 1
+    assert boundary.start_positions == 2
+    assert boundary.end_positions == 2
+    assert torch.isfinite(boundary.start_loss)
+    assert torch.isfinite(boundary.end_loss)
+    assert torch.allclose(
+        boundary.combined_loss,
+        (boundary.start_loss + boundary.end_loss) / 2.0,
+    )
+    boundary.combined_loss.backward()
+    supervised_positions = {1, 3, 4, 6}
+    for position in range(7):
+        has_gradient = bool((logits.grad[0, 0, position] != 0).any())
+        assert has_gradient == (position in supervised_positions)
+
+
+def test_boundary_auxiliary_loss_is_finite_without_gold_spans():
+    class_count = 1 + 2 * len(PROPOSAL_TYPES)
+    logits = torch.zeros(1, 1, 4, class_count, requires_grad=True)
+    targets = torch.full((1, 1, 4), OUTSIDE_TAG)
+
+    boundary = boundary_auxiliary_losses(logits, targets)
+
+    assert boundary.start_positions == 0
+    assert boundary.end_positions == 0
+    assert torch.isfinite(boundary.combined_loss)
+    boundary.combined_loss.backward()
+    assert not bool((logits.grad != 0).any())
+
+
+def test_boundary_objective_adds_no_parameters_and_composes_with_bio_loss():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+    encoded = encode_proposal_record(record, tokenizer, 256)
+    model = _model(tokenizer)
+    before = sum(parameter.numel() for parameter in model.parameters())
+    batch = proposal_batch(
+        (encoded,), (0,), tokenizer, model.source_width, "cpu"
+    )
+
+    output = model(*batch, boundary_loss_weight=1.0)
+
+    after = sum(parameter.numel() for parameter in model.parameters())
+    assert before == after
+    assert output.loss is not None
+    assert output.tag_loss is not None
+    assert output.boundary_loss is not None
+    assert output.boundary_start_positions == len(encoded.gold_spans)
+    assert output.boundary_end_positions == len(encoded.gold_spans)
+    assert torch.allclose(
+        output.loss, output.tag_loss + output.boundary_loss
+    )
+
+
+def test_boundary_objective_rejects_negative_weight():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+    encoded = encode_proposal_record(record, tokenizer, 256)
+    model = _model(tokenizer)
+    batch = proposal_batch(
+        (encoded,), (0,), tokenizer, model.source_width, "cpu"
+    )
+
+    try:
+        model(*batch, boundary_loss_weight=-1.0)
+    except ValueError as error:
+        assert "boundary loss weight" in str(error)
+    else:
+        raise AssertionError("negative boundary loss weight was accepted")
 
 
 def test_proposal_metrics_count_exact_and_missing_answers():

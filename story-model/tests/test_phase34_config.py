@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
@@ -28,3 +29,24 @@ def test_phase34_configs_freeze_experiment_shape_and_bound_updates():
     assert pilot["train"]["max_steps"] == 1000
     assert smoke["train"]["span_precision_floor"] == 0.98
     assert pilot["train"]["answer_candidate_floor"] == 0.995
+
+
+def test_phase34d_changes_only_the_boundary_objective_and_run_bounds():
+    baseline_smoke = _load("explicit_offset_candidate_proposer_smoke.yaml")
+    baseline_pilot = _load("explicit_offset_candidate_proposer_pilot.yaml")
+    smoke = _load("explicit_offset_boundary_supervision_smoke.yaml")
+    pilot = _load("explicit_offset_boundary_supervision_pilot.yaml")
+
+    expected_smoke = deepcopy(baseline_smoke)
+    expected_smoke["train"]["boundary_loss_weight"] = 1.0
+    expected_smoke["checkpoint"]["dir"] = (
+        "checkpoints/explicit_offset_boundary_supervision_smoke"
+    )
+    expected_pilot = deepcopy(baseline_pilot)
+    expected_pilot["train"]["boundary_loss_weight"] = 1.0
+    expected_pilot["checkpoint"]["dir"] = (
+        "checkpoints/explicit_offset_boundary_supervision_pilot"
+    )
+
+    assert smoke == expected_smoke
+    assert pilot == expected_pilot
