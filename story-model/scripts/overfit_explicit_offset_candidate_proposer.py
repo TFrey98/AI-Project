@@ -146,8 +146,18 @@ def _assess(model, examples, records, tokenizer, device):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--steps", type=int, default=3000)
+    parser.add_argument("--steps", type=int)
+    parser.add_argument(
+        "--factorized-boundary-type",
+        action="store_true",
+        help="exercise the Phase 34i shared-boundary and type heads",
+    )
     args = parser.parse_args()
+    steps = args.steps
+    if steps is None:
+        steps = 6000 if args.factorized_boundary_type else 3000
+    if steps < 1:
+        raise ValueError("steps must be positive")
     seed_everything(1337)
     device = torch.device(resolve_device(args.device))
     train_records = _records(TRAIN_VALUES, "train")
@@ -178,24 +188,40 @@ def main() -> None:
         block_size,
     )
     model = ExplicitOffsetCandidateProposer(
-        UnifiedTypedSpanResolver(backbone), tokenizer
+        UnifiedTypedSpanResolver(backbone),
+        tokenizer,
+        factorized_boundary_type=args.factorized_boundary_type,
     ).to(device)
     optimizer = torch.optim.AdamW(tuple(model.proposer_parameters()), lr=3.0e-3)
     initial = None
     final = None
-    for step in range(args.steps + 1):
+    for step in range(steps + 1):
         model.train()
         indices = torch.randint(0, len(train_examples), (8,)).tolist()
         batch = proposal_batch(
             train_examples, indices, tokenizer, model.source_width, device
         )
-        output = model(*batch)
+        output = model(
+            *batch,
+            boundary_loss_weight=(
+                1.0 if args.factorized_boundary_type else 0.0
+            ),
+        )
         assert output.loss is not None
         if initial is None:
             initial = float(output.loss.detach())
         final = float(output.loss.detach())
         if step % 100 == 0:
-            print(f"step {step:3d}: loss {final:.6f}")
+            components = ""
+            if args.factorized_boundary_type:
+                assert output.boundary_class_loss is not None
+                assert output.type_loss is not None
+                components = (
+                    ", boundary "
+                    f"{float(output.boundary_class_loss.detach()):.6f}"
+                    f", type {float(output.type_loss.detach()):.6f}"
+                )
+            print(f"step {step:3d}: loss {final:.6f}{components}")
         optimizer.zero_grad(set_to_none=True)
         output.loss.backward()
         torch.nn.utils.clip_grad_norm_(tuple(model.proposer_parameters()), 1.0)
@@ -219,7 +245,12 @@ def main() -> None:
         or train["offset_validity_rate"] < 1.0
     ):
         raise SystemExit("explicit-offset proposer primitive failed")
-    print("explicit-offset proposer primitive: passed")
+    label = (
+        "factorized boundary/type proposer"
+        if args.factorized_boundary_type
+        else "explicit-offset proposer"
+    )
+    print(f"{label} primitive: passed")
 
 
 if __name__ == "__main__":

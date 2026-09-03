@@ -98,3 +98,24 @@ def test_phase34g_replaces_width_with_token_end_geometry():
 
     assert smoke == expected_smoke
     assert pilot == expected_pilot
+
+
+def test_phase34i_replaces_geometry_with_factorized_heads():
+    baseline_smoke = _load("explicit_offset_boundary_supervision_smoke.yaml")
+    baseline_pilot = _load("explicit_offset_boundary_supervision_pilot.yaml")
+    smoke = _load("explicit_offset_factorized_head_smoke.yaml")
+    pilot = _load("explicit_offset_factorized_head_pilot.yaml")
+
+    expected_smoke = deepcopy(baseline_smoke)
+    expected_smoke["train"]["factorized_boundary_type_version"] = 1
+    expected_smoke["checkpoint"]["dir"] = (
+        "checkpoints/explicit_offset_factorized_head_smoke"
+    )
+    expected_pilot = deepcopy(baseline_pilot)
+    expected_pilot["train"]["factorized_boundary_type_version"] = 1
+    expected_pilot["checkpoint"]["dir"] = (
+        "checkpoints/explicit_offset_factorized_head_pilot"
+    )
+
+    assert smoke == expected_smoke
+    assert pilot == expected_pilot

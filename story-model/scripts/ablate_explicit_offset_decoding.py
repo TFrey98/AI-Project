@@ -22,6 +22,7 @@ from story_model.explicit_offset_candidate_proposer import (
     PERMISSIVE_DECODE_POLICY,
     STRICT_DECODE_POLICY,
     ExplicitOffsetCandidateProposer,
+    checkpoint_uses_factorized_boundary_type,
     checkpoint_uses_token_end_geometry,
     checkpoint_uses_token_width_geometry,
     decode_proposal_result,
@@ -80,6 +81,9 @@ def _load_model(path: Path, device: torch.device):
         tokenizer,
         token_width_geometry=checkpoint_uses_token_width_geometry(extra),
         token_end_geometry=checkpoint_uses_token_end_geometry(extra),
+        factorized_boundary_type=checkpoint_uses_factorized_boundary_type(
+            extra
+        ),
     )
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
     model.to(device).eval()

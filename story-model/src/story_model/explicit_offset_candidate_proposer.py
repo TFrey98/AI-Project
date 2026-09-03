@@ -44,10 +44,14 @@ EXPLICIT_OFFSET_PROPOSER_VERSION = 1
 BOUNDARY_OBJECTIVE_VERSION = 1
 TOKEN_WIDTH_GEOMETRY_VERSION = 1
 TOKEN_END_GEOMETRY_VERSION = 1
+FACTORIZED_BOUNDARY_TYPE_VERSION = 1
 PROPOSAL_TYPES = tuple(sorted(set(SKILL_VALUE_TYPES.values())))
 TYPE_TO_INDEX = {value_type: index for index, value_type in enumerate(PROPOSAL_TYPES)}
 OUTSIDE_TAG = 0
 IGNORE_TAG = -100
+BOUNDARY_OUTSIDE = 0
+BOUNDARY_BEGIN = 1
+BOUNDARY_INSIDE = 2
 MAX_DECODED_SPANS = 16
 EXCLUDED_PROPOSER_CASES = ("wrong_type",)
 PERMISSIVE_DECODE_POLICY = "permissive"
@@ -79,6 +83,21 @@ def checkpoint_uses_token_end_geometry(extra: dict) -> bool:
     if type(version) is not int or version != TOKEN_END_GEOMETRY_VERSION:
         raise ValueError(
             "checkpoint has an unsupported token-end geometry version"
+        )
+    return True
+
+
+def checkpoint_uses_factorized_boundary_type(extra: dict) -> bool:
+    """Return whether proposer metadata selects the Phase 34i heads."""
+
+    version = extra.get("factorized_boundary_type_version")
+    if version is None:
+        return False
+    if type(version) is not int or (
+        version != FACTORIZED_BOUNDARY_TYPE_VERSION
+    ):
+        raise ValueError(
+            "checkpoint has an unsupported factorized boundary/type version"
         )
     return True
 
@@ -357,10 +376,15 @@ def proposal_batch(
 class CandidateProposerOutput:
     tag_logits: torch.Tensor
     loss: Optional[torch.Tensor]
+    boundary_logits: Optional[torch.Tensor] = None
+    type_logits: Optional[torch.Tensor] = None
     tag_loss: Optional[torch.Tensor] = None
     boundary_start_loss: Optional[torch.Tensor] = None
     boundary_end_loss: Optional[torch.Tensor] = None
     boundary_loss: Optional[torch.Tensor] = None
+    boundary_class_loss: Optional[torch.Tensor] = None
+    type_loss: Optional[torch.Tensor] = None
+    type_positions: int = 0
     boundary_start_positions: int = 0
     boundary_end_positions: int = 0
 
@@ -372,6 +396,61 @@ class BoundaryAuxiliaryLosses:
     combined_loss: torch.Tensor
     start_positions: int
     end_positions: int
+
+
+def collapsed_boundary_targets(tag_targets: torch.Tensor) -> torch.Tensor:
+    """Map typed BIO targets to shared O/B/I targets."""
+
+    boundary_targets = torch.full_like(tag_targets, IGNORE_TAG)
+    supervised = tag_targets != IGNORE_TAG
+    boundary_targets[supervised & (tag_targets == OUTSIDE_TAG)] = (
+        BOUNDARY_OUTSIDE
+    )
+    positive = supervised & (tag_targets > OUTSIDE_TAG)
+    boundary_targets[
+        positive & ((tag_targets - 1).remainder(2) == 0)
+    ] = BOUNDARY_BEGIN
+    boundary_targets[
+        positive & ((tag_targets - 1).remainder(2) == 1)
+    ] = BOUNDARY_INSIDE
+    return boundary_targets
+
+
+def typed_targets(tag_targets: torch.Tensor) -> torch.Tensor:
+    """Map positive typed BIO targets to type indices."""
+
+    targets = torch.full_like(tag_targets, IGNORE_TAG)
+    positive = tag_targets > OUTSIDE_TAG
+    targets[positive] = (tag_targets[positive] - 1).div(
+        2, rounding_mode="floor"
+    )
+    return targets
+
+
+def compose_factorized_tag_logits(
+    boundary_logits: torch.Tensor,
+    type_logits: torch.Tensor,
+) -> torch.Tensor:
+    """Compose typed BIO logits while preserving independent argmaxes."""
+
+    if boundary_logits.shape[:-1] != type_logits.shape[:-1]:
+        raise ValueError("boundary and type logits must cover the same bytes")
+    if boundary_logits.shape[-1] != 3:
+        raise ValueError("factorized boundary logits must contain O/B/I")
+    if type_logits.shape[-1] != len(PROPOSAL_TYPES):
+        raise ValueError("factorized type logits have the wrong width")
+    relative_type = type_logits - type_logits.max(dim=-1, keepdim=True).values
+    pieces = [boundary_logits[..., BOUNDARY_OUTSIDE]]
+    for type_index in range(len(PROPOSAL_TYPES)):
+        pieces.append(
+            boundary_logits[..., BOUNDARY_BEGIN]
+            + relative_type[..., type_index]
+        )
+        pieces.append(
+            boundary_logits[..., BOUNDARY_INSIDE]
+            + relative_type[..., type_index]
+        )
+    return torch.stack(pieces, dim=-1)
 
 
 def boundary_auxiliary_losses(
@@ -455,11 +534,21 @@ class ExplicitOffsetCandidateProposer(nn.Module):
         tokenizer: ByteBPETokenizer,
         token_width_geometry: bool = False,
         token_end_geometry: bool = False,
+        factorized_boundary_type: bool = False,
     ) -> None:
         super().__init__()
-        if token_width_geometry and token_end_geometry:
+        feature_count = sum(
+            bool(value)
+            for value in (
+                token_width_geometry,
+                token_end_geometry,
+                factorized_boundary_type,
+            )
+        )
+        if feature_count > 1:
             raise ValueError(
-                "token-width and token-end geometry are mutually exclusive"
+                "token-width, token-end, and factorized heads are mutually "
+                "exclusive"
             )
         self.resolver = resolver
         for parameter in self.resolver.parameters():
@@ -488,6 +577,18 @@ class ExplicitOffsetCandidateProposer(nn.Module):
         self.proposal_tag = nn.Linear(
             embedding_dim, 1 + 2 * len(PROPOSAL_TYPES)
         )
+        self.factorized_boundary_type = bool(factorized_boundary_type)
+        self.proposal_boundary = None
+        self.proposal_type = None
+        if self.factorized_boundary_type:
+            # Keep construction from perturbing the Phase 34d parameter and
+            # batch-sampling RNG trajectory. The legacy tag head remains in
+            # the state dict for controlled initialization but is frozen.
+            with torch.random.fork_rng(devices=[]):
+                self.proposal_boundary = nn.Linear(embedding_dim, 3)
+                self.proposal_type = nn.Linear(
+                    embedding_dim, len(PROPOSAL_TYPES)
+                )
         self.token_width_geometry = bool(token_width_geometry)
         self.proposal_token_width_embedding = None
         if self.token_width_geometry:
@@ -515,6 +616,11 @@ class ExplicitOffsetCandidateProposer(nn.Module):
             ),
             persistent=False,
         )
+        self.register_buffer(
+            "boundary_class_weights",
+            torch.tensor([0.05, 1.0, 0.5], dtype=torch.float32),
+            persistent=False,
+        )
         for module in (
             self.proposal_query,
             self.proposal_key,
@@ -527,6 +633,14 @@ class ExplicitOffsetCandidateProposer(nn.Module):
                     nn.init.zeros_(module.bias)
             else:
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        if self.factorized_boundary_type:
+            assert self.proposal_boundary is not None
+            assert self.proposal_type is not None
+            with torch.random.fork_rng(devices=[]):
+                for module in (self.proposal_boundary, self.proposal_type):
+                    nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                    nn.init.zeros_(module.bias)
+            self.proposal_tag.requires_grad_(False)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -535,7 +649,7 @@ class ExplicitOffsetCandidateProposer(nn.Module):
 
     def proposer_parameters(self):
         for name, parameter in self.named_parameters():
-            if not name.startswith("resolver."):
+            if not name.startswith("resolver.") and parameter.requires_grad:
                 yield parameter
 
     def forward(
@@ -577,7 +691,18 @@ class ExplicitOffsetCandidateProposer(nn.Module):
                 token_ends.long()
             )
         byte_states = torch.tanh(byte_inputs)
-        tag_logits = self.proposal_tag(byte_states)
+        boundary_logits = None
+        type_logits = None
+        if self.factorized_boundary_type:
+            assert self.proposal_boundary is not None
+            assert self.proposal_type is not None
+            boundary_logits = self.proposal_boundary(byte_states)
+            type_logits = self.proposal_type(byte_states)
+            tag_logits = compose_factorized_tag_logits(
+                boundary_logits, type_logits
+            )
+        else:
+            tag_logits = self.proposal_tag(byte_states)
         tag_logits = tag_logits.masked_fill(
             ~self.token_byte_mask[tokens].unsqueeze(-1),
             torch.finfo(tag_logits.dtype).min,
@@ -587,18 +712,51 @@ class ExplicitOffsetCandidateProposer(nn.Module):
         boundary_start_loss = None
         boundary_end_loss = None
         boundary_loss = None
+        boundary_class_loss = None
+        type_loss = None
+        type_positions = 0
         boundary_start_positions = 0
         boundary_end_positions = 0
         if tag_targets is not None:
             if tag_targets.shape != tag_logits.shape[:-1]:
                 raise ValueError("tag targets must match byte-logit positions")
-            tag_loss = F.cross_entropy(
-                tag_logits.reshape(-1, tag_logits.shape[-1]),
-                tag_targets.reshape(-1),
-                weight=self.tag_class_weights.to(dtype=tag_logits.dtype),
-                ignore_index=IGNORE_TAG,
+            auxiliary_logits = tag_logits
+            auxiliary_targets = tag_targets
+            if self.factorized_boundary_type:
+                assert boundary_logits is not None
+                assert type_logits is not None
+                boundary_targets = collapsed_boundary_targets(tag_targets)
+                type_targets = typed_targets(tag_targets)
+                boundary_class_loss = F.cross_entropy(
+                    boundary_logits.reshape(-1, 3),
+                    boundary_targets.reshape(-1),
+                    weight=self.boundary_class_weights.to(
+                        dtype=boundary_logits.dtype
+                    ),
+                    ignore_index=IGNORE_TAG,
+                )
+                type_positions = int((type_targets != IGNORE_TAG).sum())
+                if type_positions:
+                    type_loss = F.cross_entropy(
+                        type_logits.reshape(-1, len(PROPOSAL_TYPES)),
+                        type_targets.reshape(-1),
+                        ignore_index=IGNORE_TAG,
+                    )
+                else:
+                    type_loss = type_logits.reshape(-1)[0] * 0.0
+                tag_loss = boundary_class_loss + type_loss
+                auxiliary_logits = boundary_logits
+                auxiliary_targets = boundary_targets
+            else:
+                tag_loss = F.cross_entropy(
+                    tag_logits.reshape(-1, tag_logits.shape[-1]),
+                    tag_targets.reshape(-1),
+                    weight=self.tag_class_weights.to(dtype=tag_logits.dtype),
+                    ignore_index=IGNORE_TAG,
+                )
+            boundary = boundary_auxiliary_losses(
+                auxiliary_logits, auxiliary_targets
             )
-            boundary = boundary_auxiliary_losses(tag_logits, tag_targets)
             boundary_start_loss = boundary.start_loss
             boundary_end_loss = boundary.end_loss
             boundary_loss = boundary.combined_loss
@@ -608,10 +766,15 @@ class ExplicitOffsetCandidateProposer(nn.Module):
         return CandidateProposerOutput(
             tag_logits=tag_logits,
             loss=loss,
+            boundary_logits=boundary_logits,
+            type_logits=type_logits,
             tag_loss=tag_loss,
             boundary_start_loss=boundary_start_loss,
             boundary_end_loss=boundary_end_loss,
             boundary_loss=boundary_loss,
+            boundary_class_loss=boundary_class_loss,
+            type_loss=type_loss,
+            type_positions=type_positions,
             boundary_start_positions=boundary_start_positions,
             boundary_end_positions=boundary_end_positions,
         )

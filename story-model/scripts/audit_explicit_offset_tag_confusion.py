@@ -21,6 +21,7 @@ from story_model.explicit_offset_candidate_proposer import (
     EXCLUDED_PROPOSER_CASES,
     EXPLICIT_OFFSET_PROPOSER_VERSION,
     ExplicitOffsetCandidateProposer,
+    checkpoint_uses_factorized_boundary_type,
     checkpoint_uses_token_end_geometry,
     checkpoint_uses_token_width_geometry,
     encode_proposal_records,
@@ -86,6 +87,9 @@ def _load_model(path: Path, device: torch.device):
         tokenizer,
         token_width_geometry=checkpoint_uses_token_width_geometry(extra),
         token_end_geometry=checkpoint_uses_token_end_geometry(extra),
+        factorized_boundary_type=checkpoint_uses_factorized_boundary_type(
+            extra
+        ),
     )
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
     model.to(device).eval()
@@ -93,6 +97,17 @@ def _load_model(path: Path, device: torch.device):
 
 
 def _collapsed_model_weights(model) -> dict:
+    if model.factorized_boundary_type:
+        weights = (
+            model.boundary_class_weights.detach().float().cpu().tolist()
+        )
+        if len(weights) != 3:
+            raise ValueError("factorized proposer has invalid O/B/I weights")
+        return {
+            "O": float(weights[0]),
+            "B": float(weights[1]),
+            "I": float(weights[2]),
+        }
     weights = model.tag_class_weights.detach().float().cpu().tolist()
     begin_weights = tuple(weights[1::2])
     inside_weights = tuple(weights[2::2])
@@ -142,9 +157,18 @@ def _begin_geometry_rows(logits, example, tokenizer) -> list[dict]:
                 break
         else:
             raise RuntimeError("gold start is outside prompt token ranges")
+        token_id = example.input_ids[token_position]
+        token_bytes = tokenizer.token_bytes(token_id)
+        try:
+            token_utf8 = token_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            token_utf8 = None
         predicted = int(logits[token_position, byte_offset].argmax())
         rows.append(
             {
+                "token_id": token_id,
+                "token_bytes_hex": token_bytes.hex(),
+                "token_utf8": token_utf8,
                 "token_width": token_width,
                 "token_byte_offset": byte_offset,
                 "token_alignment": (
@@ -171,6 +195,8 @@ def _summarize_begin_geometry(rows) -> dict:
 
     dimensions = {}
     for field in (
+        "token_id",
+        "token_bytes_hex",
         "token_width",
         "token_byte_offset",
         "token_alignment",
@@ -303,6 +329,9 @@ def main() -> None:
         "checkpoint_token_end_geometry_version": checkpoint.get(
             "extra", {}
         ).get("token_end_geometry_version"),
+        "checkpoint_factorized_boundary_type_version": checkpoint.get(
+            "extra", {}
+        ).get("factorized_boundary_type_version"),
         "device": str(device),
         "decoder_policy": "unchanged_permissive",
         "training_changes": "none",

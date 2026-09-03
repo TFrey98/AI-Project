@@ -22,6 +22,7 @@ from story_model.explicit_offset_candidate_proposer import (
     BOUNDARY_OBJECTIVE_VERSION,
     EXCLUDED_PROPOSER_CASES,
     EXPLICIT_OFFSET_PROPOSER_VERSION,
+    FACTORIZED_BOUNDARY_TYPE_VERSION,
     TOKEN_END_GEOMETRY_VERSION,
     TOKEN_WIDTH_GEOMETRY_VERSION,
     ExplicitOffsetCandidateProposer,
@@ -79,9 +80,20 @@ def _load_config(path: Path) -> dict:
     end_geometry_version = config.get("train", {}).get(
         "token_end_geometry_version"
     )
-    if geometry_version is not None and end_geometry_version is not None:
+    factorized_version = config.get("train", {}).get(
+        "factorized_boundary_type_version"
+    )
+    if sum(
+        value is not None
+        for value in (
+            geometry_version,
+            end_geometry_version,
+            factorized_version,
+        )
+    ) > 1:
         raise ValueError(
-            "token-width and token-end geometry are mutually exclusive"
+            "token-width, token-end, and factorized heads are mutually "
+            "exclusive"
         )
     if geometry_version is not None:
         if type(geometry_version) is not int or (
@@ -104,6 +116,15 @@ def _load_config(path: Path) -> dict:
         if not config.get("train", {}).get("token_end_premise_path"):
             raise ValueError(
                 "token-end geometry requires token_end_premise_path"
+            )
+    if factorized_version is not None:
+        if type(factorized_version) is not int or (
+            factorized_version != FACTORIZED_BOUNDARY_TYPE_VERSION
+        ):
+            raise ValueError("unsupported factorized_boundary_type_version")
+        if abs(boundary_loss_weight - 1.0) > 1.0e-9:
+            raise ValueError(
+                "factorized boundary/type requires boundary_loss_weight=1.0"
             )
     return config
 
@@ -199,6 +220,10 @@ def _evaluate(
     loss_sum = 0.0
     loss_total = 0
     tag_loss_sum = 0.0
+    boundary_class_loss_sum = 0.0
+    boundary_class_positions = 0
+    type_loss_sum = 0.0
+    type_positions = 0
     start_loss_sum = 0.0
     start_positions = 0
     end_loss_sum = 0.0
@@ -223,6 +248,14 @@ def _evaluate(
         assert output.boundary_start_loss is not None
         assert output.boundary_end_loss is not None
         tag_loss_sum += float(output.tag_loss) * supervised
+        if output.boundary_class_loss is not None:
+            boundary_class_loss_sum += (
+                float(output.boundary_class_loss) * supervised
+            )
+            boundary_class_positions += supervised
+        if output.type_loss is not None:
+            type_loss_sum += float(output.type_loss) * output.type_positions
+            type_positions += output.type_positions
         start_loss_sum += (
             float(output.boundary_start_loss)
             * output.boundary_start_positions
@@ -262,6 +295,15 @@ def _evaluate(
     metrics = proposal_metrics(rows)
     metrics["loss"] = loss_sum / loss_total if loss_total else 0.0
     metrics["tag_loss"] = tag_loss_sum / loss_total if loss_total else 0.0
+    if boundary_class_positions:
+        metrics["boundary_class_loss"] = (
+            boundary_class_loss_sum / boundary_class_positions
+        )
+    if type_positions:
+        metrics["type_loss"] = type_loss_sum / type_positions
+    elif boundary_class_positions:
+        metrics["type_loss"] = 0.0
+    metrics["type_positions"] = type_positions
     metrics["boundary_start_loss"] = (
         start_loss_sum / start_positions if start_positions else 0.0
     )
@@ -370,11 +412,15 @@ def main() -> None:
     resolver.load_state_dict(checkpoint["model_state_dict"], strict=True)
     geometry_version = train_config.get("token_width_geometry_version")
     end_geometry_version = train_config.get("token_end_geometry_version")
+    factorized_version = train_config.get(
+        "factorized_boundary_type_version"
+    )
     model = ExplicitOffsetCandidateProposer(
         resolver,
         tokenizer,
         token_width_geometry=geometry_version is not None,
         token_end_geometry=end_geometry_version is not None,
+        factorized_boundary_type=factorized_version is not None,
     ).to(device)
 
     phase31_train = _eligible_records(data_config["phase31_train_path"])
@@ -451,6 +497,7 @@ def main() -> None:
         "boundary_loss_weight": boundary_loss_weight,
         "token_width_geometry_version": geometry_version,
         "token_end_geometry_version": end_geometry_version,
+        "factorized_boundary_type_version": factorized_version,
         "token_end_premise_path": (
             str(token_end_premise_path) if token_end_premise_path else None
         ),
@@ -477,7 +524,20 @@ def main() -> None:
     if end_geometry_version is not None:
         print(f"token-end geometry: version {end_geometry_version}")
         print(f"token-end premise: {token_end_premise_path}")
-    if boundary_loss_weight:
+    if factorized_version is not None:
+        print(
+            "factorized boundary/type heads: "
+            f"version {factorized_version}"
+        )
+        print(
+            "loss objective: shared_byte_BIO+positive_byte_type"
+            "+boundary_transition"
+        )
+        print("boundary class weights: O=0.05, B=1.0, I=0.5")
+        print("type loss: positive bytes only, weight 1")
+        print(f"boundary loss weight: {boundary_loss_weight:g}")
+        print("boundary terms: gold_begin + first_gold_outside_after_span")
+    elif boundary_loss_weight:
         print("loss objective: typed_byte_BIO+boundary_transition")
         print(f"boundary loss weight: {boundary_loss_weight:g}")
         print("boundary terms: gold_begin + first_gold_outside_after_span")
@@ -530,9 +590,18 @@ def main() -> None:
             type_floor,
         )
         last_eligible = eligible
+        factorized_eval = ""
+        if factorized_version is not None:
+            factorized_eval = (
+                f"boundary-class "
+                f"{val_metrics['boundary_class_loss']:.4f}, "
+                f"type loss {val_metrics['type_loss']:.4f}, "
+                f"type positions {val_metrics['type_positions']}, "
+            )
         print(
             f"update {step}: train loss {train_metrics['loss']:.4f}, "
             f"val loss {val_metrics['loss']:.4f}, "
+            f"{factorized_eval}"
             f"start loss {val_metrics['boundary_start_loss']:.4f}, "
             f"end loss {val_metrics['boundary_end_loss']:.4f}, "
             f"B->I {val_metrics['gold_begin_as_inside_rate']:.3f}, "
@@ -604,6 +673,9 @@ def main() -> None:
         optimizer.zero_grad(set_to_none=True)
         accumulated_loss = 0.0
         accumulated_tag_loss = 0.0
+        accumulated_boundary_class_loss = 0.0
+        accumulated_type_loss = 0.0
+        accumulated_type_positions = 0
         accumulated_start_loss = 0.0
         accumulated_end_loss = 0.0
         accumulated_start_positions = 0
@@ -626,6 +698,14 @@ def main() -> None:
             assert output.boundary_end_loss is not None
             accumulated_loss += float(output.loss.detach())
             accumulated_tag_loss += float(output.tag_loss.detach())
+            if factorized_version is not None:
+                assert output.boundary_class_loss is not None
+                assert output.type_loss is not None
+                accumulated_boundary_class_loss += float(
+                    output.boundary_class_loss.detach()
+                )
+                accumulated_type_loss += float(output.type_loss.detach())
+                accumulated_type_positions += output.type_positions
             accumulated_start_loss += float(
                 output.boundary_start_loss.detach()
             )
@@ -639,9 +719,18 @@ def main() -> None:
         optimizer.step()
         completed_steps = step
         if step % log_interval == 0:
+            factorized_log = ""
+            if factorized_version is not None:
+                factorized_log = (
+                    f"boundary-class "
+                    f"{accumulated_boundary_class_loss / accumulation:.4f}, "
+                    f"type {accumulated_type_loss / accumulation:.4f}, "
+                    f"type positions {accumulated_type_positions}, "
+                )
             print(
                 f"step {step}: loss {accumulated_loss / accumulation:.4f}, "
                 f"tag {accumulated_tag_loss / accumulation:.4f}, "
+                f"{factorized_log}"
                 f"start {accumulated_start_loss / accumulation:.4f}, "
                 f"end {accumulated_end_loss / accumulation:.4f}, "
                 f"boundary positions "

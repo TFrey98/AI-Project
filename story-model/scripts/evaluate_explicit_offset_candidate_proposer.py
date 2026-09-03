@@ -26,6 +26,7 @@ from story_model.explicit_offset_candidate_proposer import (
     EXCLUDED_PROPOSER_CASES,
     EXPLICIT_OFFSET_PROPOSER_VERSION,
     ExplicitOffsetCandidateProposer,
+    checkpoint_uses_factorized_boundary_type,
     checkpoint_uses_token_end_geometry,
     checkpoint_uses_token_width_geometry,
     decode_proposed_spans,
@@ -76,6 +77,9 @@ def _load_model(path: Path, device: torch.device):
         tokenizer,
         token_width_geometry=checkpoint_uses_token_width_geometry(extra),
         token_end_geometry=checkpoint_uses_token_end_geometry(extra),
+        factorized_boundary_type=checkpoint_uses_factorized_boundary_type(
+            extra
+        ),
     )
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
     model.to(device).eval()
@@ -325,6 +329,9 @@ def main() -> None:
         "checkpoint_token_end_geometry_version": checkpoint.get(
             "extra", {}
         ).get("token_end_geometry_version"),
+        "checkpoint_factorized_boundary_type_version": checkpoint.get(
+            "extra", {}
+        ).get("factorized_boundary_type_version"),
         "device": str(device),
         "excluded_cases": list(EXCLUDED_PROPOSER_CASES),
         "phase31_regression": {"splits": {}},

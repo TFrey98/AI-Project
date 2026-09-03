@@ -4,6 +4,7 @@ import torch
 
 from scripts.audit_explicit_offset_tag_confusion import (
     _begin_geometry_rows,
+    _collapsed_model_weights,
     _summarize_begin_geometry,
 )
 from story_model.data import ByteBPETokenizer
@@ -16,7 +17,11 @@ from story_model.expanded_typed_span_resolver import (
     ExpandedResolverRecord,
 )
 from story_model.explicit_offset_candidate_proposer import (
+    BOUNDARY_BEGIN,
+    BOUNDARY_INSIDE,
     BOUNDARY_OBJECTIVE_VERSION,
+    BOUNDARY_OUTSIDE,
+    FACTORIZED_BOUNDARY_TYPE_VERSION,
     IGNORE_TAG,
     OUTSIDE_TAG,
     PERMISSIVE_DECODE_POLICY,
@@ -24,12 +29,16 @@ from story_model.explicit_offset_candidate_proposer import (
     STRICT_DECODE_POLICY,
     TOKEN_END_GEOMETRY_VERSION,
     TOKEN_WIDTH_GEOMETRY_VERSION,
+    TYPE_TO_INDEX,
     EvidenceSpan,
     ExplicitOffsetCandidateProposer,
     begin_tag,
     boundary_auxiliary_losses,
+    checkpoint_uses_factorized_boundary_type,
     checkpoint_uses_token_end_geometry,
     checkpoint_uses_token_width_geometry,
+    collapsed_boundary_targets,
+    compose_factorized_tag_logits,
     decode_proposal_result,
     decode_proposed_spans,
     encode_proposal_record,
@@ -42,6 +51,7 @@ from story_model.explicit_offset_candidate_proposer import (
     realize_proposed_decision,
     runtime_record_from_spans,
     inside_tag,
+    typed_targets,
 )
 from story_model.models import build_model
 from story_model.unified_typed_span_resolver import UnifiedTypedSpanResolver
@@ -94,6 +104,7 @@ def _model(
     block_size=256,
     token_width_geometry=False,
     token_end_geometry=False,
+    factorized_boundary_type=False,
 ):
     backbone = build_model(
         {
@@ -115,6 +126,7 @@ def _model(
         tokenizer,
         token_width_geometry=token_width_geometry,
         token_end_geometry=token_end_geometry,
+        factorized_boundary_type=factorized_boundary_type,
     )
 
 
@@ -445,6 +457,8 @@ def test_begin_geometry_audit_uses_gold_start_token_width_and_offset():
             encoded, tokenizer, span.byte_start
         )
         token_id = encoded.input_ids[token_position]
+        assert row["token_id"] == token_id
+        assert row["token_bytes_hex"] == tokenizer.token_bytes(token_id).hex()
         assert row["token_width"] == tokenizer.token_byte_length(token_id)
         assert row["token_byte_offset"] == byte_offset
         assert row["token_end"] == (
@@ -536,6 +550,168 @@ def test_token_end_geometry_is_trainable_versioned_and_exclusive():
         assert "mutually exclusive" in str(error)
     else:
         raise AssertionError("stacked geometry features were accepted")
+
+
+def test_factorized_targets_preserve_boundary_and_type_labels():
+    targets = torch.tensor(
+        [[[
+            OUTSIDE_TAG,
+            begin_tag("container"),
+            inside_tag("container"),
+            begin_tag("person"),
+            inside_tag("person"),
+            IGNORE_TAG,
+        ]]]
+    )
+
+    boundary = collapsed_boundary_targets(targets)
+    types = typed_targets(targets)
+
+    assert boundary.tolist() == [[[
+        BOUNDARY_OUTSIDE,
+        BOUNDARY_BEGIN,
+        BOUNDARY_INSIDE,
+        BOUNDARY_BEGIN,
+        BOUNDARY_INSIDE,
+        IGNORE_TAG,
+    ]]]
+    assert types.tolist() == [[[
+        IGNORE_TAG,
+        TYPE_TO_INDEX["container"],
+        TYPE_TO_INDEX["container"],
+        TYPE_TO_INDEX["person"],
+        TYPE_TO_INDEX["person"],
+        IGNORE_TAG,
+    ]]]
+
+
+def test_factorized_composition_preserves_independent_argmaxes():
+    boundary = torch.tensor(
+        [
+            [3.0, 1.0, 0.0],
+            [0.0, 3.0, 1.0],
+            [0.0, 1.0, 3.0],
+        ]
+    )
+    types = torch.zeros(3, len(PROPOSAL_TYPES))
+    types[0, TYPE_TO_INDEX["action"]] = 2.0
+    types[1, TYPE_TO_INDEX["route"]] = 4.0
+    types[2, TYPE_TO_INDEX["person"]] = 5.0
+
+    typed = compose_factorized_tag_logits(boundary, types)
+
+    assert typed.argmax(dim=-1).tolist() == [
+        OUTSIDE_TAG,
+        begin_tag("route"),
+        inside_tag("person"),
+    ]
+
+
+def test_factorized_head_preserves_control_rng_and_shared_parameters():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+    torch.manual_seed(2035)
+    baseline = _model(tokenizer)
+    state_after_baseline = torch.random.get_rng_state()
+    torch.manual_seed(2035)
+    factorized = _model(tokenizer, factorized_boundary_type=True)
+    state_after_factorized = torch.random.get_rng_state()
+
+    assert torch.equal(state_after_baseline, state_after_factorized)
+    factorized_parameters = dict(factorized.named_parameters())
+    for name, parameter in baseline.named_parameters():
+        assert torch.equal(parameter, factorized_parameters[name])
+    assert not factorized.proposal_tag.weight.requires_grad
+    assert not factorized.proposal_tag.bias.requires_grad
+    trainable = {
+        name
+        for name, parameter in factorized.named_parameters()
+        if parameter.requires_grad
+    }
+    assert trainable == {
+        "proposal_query.weight",
+        "proposal_key.weight",
+        "proposal_offset_embedding.weight",
+        "proposal_boundary.weight",
+        "proposal_boundary.bias",
+        "proposal_type.weight",
+        "proposal_type.bias",
+    }
+
+
+def test_factorized_head_trains_boundary_and_type_separately():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+    encoded = encode_proposal_record(record, tokenizer, 256)
+    model = _model(tokenizer, factorized_boundary_type=True)
+    batch = proposal_batch(
+        (encoded,), (0,), tokenizer, model.source_width, "cpu"
+    )
+
+    output = model(*batch, boundary_loss_weight=1.0)
+
+    assert output.loss is not None and torch.isfinite(output.loss)
+    assert output.boundary_logits is not None
+    assert output.type_logits is not None
+    assert output.boundary_class_loss is not None
+    assert output.type_loss is not None
+    assert output.type_positions > 0
+    output.loss.backward()
+    assert model.proposal_boundary is not None
+    assert model.proposal_type is not None
+    assert bool((model.proposal_boundary.weight.grad != 0).any())
+    assert bool((model.proposal_type.weight.grad != 0).any())
+    assert model.proposal_tag.weight.grad is None
+    weights = _collapsed_model_weights(model)
+    assert abs(weights["O"] - 0.05) < 1.0e-6
+    assert weights["B"] == 1.0
+    assert weights["I"] == 0.5
+    assert FACTORIZED_BOUNDARY_TYPE_VERSION == 1
+    assert checkpoint_uses_factorized_boundary_type(
+        {"factorized_boundary_type_version": 1}
+    )
+
+
+def test_factorized_type_loss_is_zero_without_positive_bytes():
+    record = _record(action=CLARIFY_ACTION)
+    tokenizer = _tokenizer((record,))
+    encoded = encode_proposal_record(record, tokenizer, 256)
+    model = _model(tokenizer, factorized_boundary_type=True)
+    batch = proposal_batch(
+        (encoded,), (0,), tokenizer, model.source_width, "cpu"
+    )
+
+    output = model(*batch, boundary_loss_weight=1.0)
+
+    assert output.type_positions == 0
+    assert output.type_loss is not None
+    assert float(output.type_loss.detach()) == 0.0
+    assert output.loss is not None and torch.isfinite(output.loss)
+
+
+def test_factorized_head_is_versioned_and_excludes_geometry_features():
+    record = _record()
+    tokenizer = _tokenizer((record,))
+
+    assert not checkpoint_uses_factorized_boundary_type({})
+    try:
+        checkpoint_uses_factorized_boundary_type(
+            {"factorized_boundary_type_version": 2}
+        )
+    except ValueError as error:
+        assert "unsupported factorized boundary/type" in str(error)
+    else:
+        raise AssertionError("unsupported factorized version was accepted")
+    try:
+        _model(
+            tokenizer,
+            token_width_geometry=True,
+            factorized_boundary_type=True,
+        )
+    except ValueError as error:
+        assert "mutually exclusive" in str(error)
+    else:
+        raise AssertionError("factorized and geometry features were stacked")
 
 
 def test_boundary_auxiliary_loss_supervises_only_gold_starts_and_ends():
