@@ -97,6 +97,17 @@ containing hundreds of sparsely repeated compositional values. The goal is to
 learn a general copy/select operation instead of a closed answer vocabulary.
 See `docs/phase29_lexical_copy.md` for the controlled comparison.
 
+## Phase 35 local-state boundary counterbalance
+
+Phase 34k localized the residual `scene_route` B-to-I error to the current
+token's contextual proposal key. Phase 35 therefore changes only training
+composition: the same BPE identities receive balanced begin/inside route
+labels, while different token identities are reserved for lexical and
+combined-transfer evaluation. The Phase 33c resolver and Phase 34d proposer
+architecture, objective, optimizer, and 1,000-update ceiling remain fixed.
+See `docs/phase35_boundary_counterbalance.md` for the tokenizer-aware builder,
+smoke/pilot commands, frozen audits, and promotion gate.
+
 ## Phase 12 document corpus
 
 Place at least two UTF-8 `.txt` documents under `data/raw/`. The

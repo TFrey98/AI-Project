@@ -12,6 +12,10 @@ import torch
 import yaml
 from torch.nn import functional as F
 
+from story_model.boundary_counterbalance import (
+    BOUNDARY_COUNTERBALANCE_VERSION,
+    validate_counterbalance_manifest,
+)
 from story_model.checkpoint import read_checkpoint, save_checkpoint
 from story_model.data import ByteBPETokenizer, tokenizer_from_dict
 from story_model.expanded_typed_span_resolver import (
@@ -23,6 +27,7 @@ from story_model.explicit_offset_candidate_proposer import (
     EXCLUDED_PROPOSER_CASES,
     EXPLICIT_OFFSET_PROPOSER_VERSION,
     FACTORIZED_BOUNDARY_TYPE_VERSION,
+    OUTSIDE_TAG,
     TOKEN_END_GEOMETRY_VERSION,
     TOKEN_WIDTH_GEOMETRY_VERSION,
     ExplicitOffsetCandidateProposer,
@@ -34,7 +39,7 @@ from story_model.explicit_offset_candidate_proposer import (
     proposal_record_is_eligible,
 )
 from story_model.models import build_model
-from story_model.provenance import training_fingerprints
+from story_model.provenance import canonical_json_sha256, training_fingerprints
 from story_model.runtime import resolve_device, seed_everything
 from story_model.train import learning_rate_for_step, set_learning_rate
 from story_model.unified_typed_span_resolver import (
@@ -83,6 +88,9 @@ def _load_config(path: Path) -> dict:
     factorized_version = config.get("train", {}).get(
         "factorized_boundary_type_version"
     )
+    counterbalance_version = config.get("train", {}).get(
+        "boundary_counterbalance_version"
+    )
     if sum(
         value is not None
         for value in (
@@ -125,6 +133,50 @@ def _load_config(path: Path) -> dict:
         if abs(boundary_loss_weight - 1.0) > 1.0e-9:
             raise ValueError(
                 "factorized boundary/type requires boundary_loss_weight=1.0"
+            )
+    if counterbalance_version is not None:
+        if type(counterbalance_version) is not int or (
+            counterbalance_version != BOUNDARY_COUNTERBALANCE_VERSION
+        ):
+            raise ValueError("unsupported boundary_counterbalance_version")
+        if abs(boundary_loss_weight - 1.0) > 1.0e-9:
+            raise ValueError(
+                "boundary counterbalance requires boundary_loss_weight=1.0"
+            )
+        if any(
+            value is not None
+            for value in (
+                geometry_version,
+                end_geometry_version,
+                factorized_version,
+            )
+        ):
+            raise ValueError(
+                "boundary counterbalance cannot change proposer architecture"
+            )
+        required = (
+            "counterbalance_train_path",
+            "counterbalance_val_path",
+            "counterbalance_manifest_path",
+        )
+        missing = [key for key in required if key not in config.get("data", {})]
+        if missing:
+            raise ValueError(
+                "boundary counterbalance data paths are missing: "
+                + ", ".join(missing)
+            )
+        accumulation = int(
+            config.get("train", {}).get("gradient_accumulation_steps", 1)
+        )
+        counterbalance_batches = int(
+            config.get("train", {}).get(
+                "counterbalance_microbatches_per_update", 1
+            )
+        )
+        if not 0 < counterbalance_batches < accumulation:
+            raise ValueError(
+                "counterbalance microbatches must be between zero and the "
+                "gradient accumulation count"
             )
     return config
 
@@ -178,6 +230,32 @@ def _balanced_batch(
     return proposal_batch(combined, indices, tokenizer, source_width, device)
 
 
+def _sample_batch(
+    examples,
+    batch_size: int,
+    tokenizer: ByteBPETokenizer,
+    source_width: int,
+    device: torch.device,
+):
+    if batch_size < 1:
+        raise ValueError("sample batch size must be positive")
+    indices = torch.randint(0, len(examples), (batch_size,)).tolist()
+    return proposal_batch(examples, indices, tokenizer, source_width, device)
+
+
+def _counterbalance_slots(
+    step: int,
+    accumulation: int,
+    count: int,
+) -> tuple[int, ...]:
+    """Rotate counterbalance microbatches without changing update size."""
+
+    if accumulation < 1 or not 0 < count < accumulation:
+        raise ValueError("invalid counterbalance accumulation schedule")
+    start = (step - 1) % accumulation
+    return tuple((start + offset) % accumulation for offset in range(count))
+
+
 def _stratified_indices(records, examples_per_cell: int) -> tuple[int, ...]:
     if examples_per_cell < 1:
         raise ValueError("eval_examples_per_cell must be positive")
@@ -203,6 +281,51 @@ def _stratified_indices(records, examples_per_cell: int) -> tuple[int, ...]:
                 for position in range(count)
             )
     return tuple(sorted(selected))
+
+
+def _focus_stratified_indices(
+    examples,
+    focus_token_ids,
+    examples_per_token: int,
+    tokenizer: ByteBPETokenizer,
+) -> tuple[int, ...]:
+    """Build a fixed panel that represents every counterbalanced identity."""
+
+    if examples_per_token < 1:
+        raise ValueError("counterbalance eval examples per token must be positive")
+    groups = {int(token_id): [] for token_id in focus_token_ids}
+    for index, example in enumerate(examples):
+        present = set()
+        byte_cursor = 0
+        for position in range(example.prompt_token_count):
+            token_id = example.input_ids[position]
+            width = tokenizer.token_byte_length(token_id)
+            if token_id in groups and any(
+                tag != OUTSIDE_TAG
+                for tag in example.prompt_byte_tags[
+                    byte_cursor : byte_cursor + width
+                ]
+            ):
+                present.add(token_id)
+            byte_cursor += width
+        for token_id in present:
+            groups[token_id].append(index)
+    selected = []
+    for token_id in sorted(groups):
+        indices = groups[token_id]
+        if not indices:
+            raise ValueError(
+                f"counterbalance panel has no examples for token {token_id}"
+            )
+        count = min(examples_per_token, len(indices))
+        if count == 1:
+            selected.append(indices[0])
+        else:
+            selected.extend(
+                indices[round(position * (len(indices) - 1) / (count - 1))]
+                for position in range(count)
+            )
+    return tuple(sorted(set(selected)))
 
 
 @torch.no_grad()
@@ -329,6 +452,7 @@ def _evaluate(
         "pre_start_bleed_rate",
         "end_spill_rate",
         "positive_type_accuracy",
+        "row_normalized_confusion_matrix",
     ):
         metrics[name] = tag_metrics[name]
     model.train()
@@ -366,6 +490,47 @@ def _selection(
         metrics["offset_validity_rate"],
         -metrics["proposal_overflow_rate"],
         -metrics["loss"],
+    )
+
+
+def _combined_selection(
+    retained_metrics: dict,
+    counterbalance_metrics: dict,
+    precision_floor: float,
+    recall_floor: float,
+    answer_floor: float,
+    type_floor: float,
+) -> tuple[bool, tuple[float, ...]]:
+    retained_eligible, _ = _selection(
+        retained_metrics,
+        precision_floor,
+        recall_floor,
+        answer_floor,
+        type_floor,
+    )
+    counterbalance_eligible, _ = _selection(
+        counterbalance_metrics,
+        precision_floor,
+        recall_floor,
+        answer_floor,
+        type_floor,
+    )
+    eligible = retained_eligible and counterbalance_eligible
+    return eligible, (
+        1.0 if eligible else 0.0,
+        min(
+            retained_metrics["answer_candidate_recall"],
+            counterbalance_metrics["answer_candidate_recall"],
+        ),
+        min(
+            retained_metrics["exact_span_f1"],
+            counterbalance_metrics["exact_span_f1"],
+        ),
+        min(
+            retained_metrics["boundary_type_accuracy"],
+            counterbalance_metrics["boundary_type_accuracy"],
+        ),
+        -(retained_metrics["loss"] + counterbalance_metrics["loss"]) / 2.0,
     )
 
 
@@ -415,6 +580,9 @@ def main() -> None:
     factorized_version = train_config.get(
         "factorized_boundary_type_version"
     )
+    counterbalance_version = train_config.get(
+        "boundary_counterbalance_version"
+    )
     model = ExplicitOffsetCandidateProposer(
         resolver,
         tokenizer,
@@ -444,6 +612,49 @@ def main() -> None:
     val_examples = phase31_val_examples + phase32_val_examples
     val_records = phase31_val + phase32_val
 
+    counterbalance_manifest = None
+    counterbalance_pools = None
+    counterbalance_train = ()
+    counterbalance_val = ()
+    counterbalance_train_examples = ()
+    counterbalance_val_examples = ()
+    if counterbalance_version is not None:
+        manifest_path = Path(data_config["counterbalance_manifest_path"])
+        counterbalance_manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        counterbalance_pools = validate_counterbalance_manifest(
+            counterbalance_manifest,
+            manifest_path.parent,
+            tokenizer,
+        )
+        expected_counterbalance_paths = {
+            "counterbalance_train_path": manifest_path.parent / "train.jsonl",
+            "counterbalance_val_path": manifest_path.parent / "val.jsonl",
+        }
+        for key, expected_path in expected_counterbalance_paths.items():
+            if Path(data_config[key]).resolve() != expected_path.resolve():
+                raise ValueError(
+                    f"{key} must name the file covered by the Phase 35 manifest"
+                )
+        counterbalance_train = _eligible_records(
+            data_config["counterbalance_train_path"]
+        )
+        counterbalance_val = _eligible_records(
+            data_config["counterbalance_val_path"]
+        )
+        if not all(
+            record.source_phase == "phase35"
+            for record in counterbalance_train + counterbalance_val
+        ):
+            raise ValueError("counterbalance rows do not declare Phase 35")
+        counterbalance_train_examples = encode_proposal_records(
+            counterbalance_train, tokenizer, block_size
+        )
+        counterbalance_val_examples = encode_proposal_records(
+            counterbalance_val, tokenizer, block_size
+        )
+
     optimizer = torch.optim.AdamW(
         tuple(model.proposer_parameters()),
         lr=float(train_config["learning_rate"]),
@@ -464,6 +675,29 @@ def main() -> None:
     examples_per_cell = int(train_config.get("eval_examples_per_cell", 4))
     train_indices = _stratified_indices(train_records, examples_per_cell)
     val_indices = _stratified_indices(val_records, examples_per_cell)
+    counterbalance_train_indices = ()
+    counterbalance_val_indices = ()
+    counterbalance_microbatches = 0
+    if counterbalance_version is not None:
+        assert counterbalance_pools is not None
+        focus_examples = int(
+            train_config.get("counterbalance_eval_examples_per_token", 4)
+        )
+        counterbalance_train_indices = _focus_stratified_indices(
+            counterbalance_train_examples,
+            counterbalance_pools["train"],
+            focus_examples,
+            tokenizer,
+        )
+        counterbalance_val_indices = _focus_stratified_indices(
+            counterbalance_val_examples,
+            counterbalance_pools["train"],
+            focus_examples,
+            tokenizer,
+        )
+        counterbalance_microbatches = int(
+            train_config.get("counterbalance_microbatches_per_update", 1)
+        )
     precision_floor = float(train_config.get("span_precision_floor", 0.98))
     recall_floor = float(train_config.get("span_recall_floor", 0.98))
     answer_floor = float(train_config.get("answer_candidate_floor", 0.995))
@@ -482,6 +716,8 @@ def main() -> None:
             Path(data_config["manifest_path"]).read_text(encoding="utf-8")
         ),
     }
+    if counterbalance_manifest is not None:
+        manifests["phase35"] = counterbalance_manifest
     metadata = {
         "architecture": "explicit_offset_candidate_proposer",
         "explicit_offset_proposer_version": EXPLICIT_OFFSET_PROPOSER_VERSION,
@@ -498,6 +734,17 @@ def main() -> None:
         "token_width_geometry_version": geometry_version,
         "token_end_geometry_version": end_geometry_version,
         "factorized_boundary_type_version": factorized_version,
+        "boundary_counterbalance_version": counterbalance_version,
+        "counterbalance_microbatches_per_update": (
+            counterbalance_microbatches
+            if counterbalance_version is not None
+            else None
+        ),
+        "counterbalance_manifest_sha256": (
+            canonical_json_sha256(counterbalance_manifest)
+            if counterbalance_manifest is not None
+            else None
+        ),
         "token_end_premise_path": (
             str(token_end_premise_path) if token_end_premise_path else None
         ),
@@ -543,6 +790,22 @@ def main() -> None:
         print("boundary terms: gold_begin + first_gold_outside_after_span")
     else:
         print("loss objective: typed_byte_BIO")
+    if counterbalance_version is not None:
+        assert counterbalance_pools is not None
+        print(
+            "boundary counterbalance: version "
+            f"{counterbalance_version}, data-only"
+        )
+        print(
+            "counterbalance schedule: "
+            f"{counterbalance_microbatches}/{accumulation} microbatches per "
+            "update"
+        )
+        print(
+            "focus-token pools: train "
+            f"{len(counterbalance_pools['train'])}, heldout "
+            f"{len(counterbalance_pools['heldout'])}, overlap 0"
+        )
     print("excluded proposer cases: wrong_type (retained in oracle gate)")
     print(
         f"training examples: {len(train_examples):,} "
@@ -551,6 +814,17 @@ def main() -> None:
     print(
         f"fixed panels: train {len(train_indices):,}, val {len(val_indices):,}"
     )
+    if counterbalance_version is not None:
+        print(
+            "counterbalance examples: train "
+            f"{len(counterbalance_train_examples):,}, val "
+            f"{len(counterbalance_val_examples):,}"
+        )
+        print(
+            "counterbalance fixed panels: train "
+            f"{len(counterbalance_train_indices):,}, val "
+            f"{len(counterbalance_val_indices):,}"
+        )
 
     best_key = None
     best_loss = None
@@ -582,13 +856,45 @@ def main() -> None:
             device,
             boundary_loss_weight,
         )
-        eligible, selection_key = _selection(
-            val_metrics,
-            precision_floor,
-            recall_floor,
-            answer_floor,
-            type_floor,
-        )
+        counterbalance_train_metrics = None
+        counterbalance_val_metrics = None
+        if counterbalance_version is not None:
+            counterbalance_train_metrics = _evaluate(
+                model,
+                counterbalance_train_examples,
+                counterbalance_train,
+                counterbalance_train_indices,
+                tokenizer,
+                eval_batch_size,
+                device,
+                boundary_loss_weight,
+            )
+            counterbalance_val_metrics = _evaluate(
+                model,
+                counterbalance_val_examples,
+                counterbalance_val,
+                counterbalance_val_indices,
+                tokenizer,
+                eval_batch_size,
+                device,
+                boundary_loss_weight,
+            )
+            eligible, selection_key = _combined_selection(
+                val_metrics,
+                counterbalance_val_metrics,
+                precision_floor,
+                recall_floor,
+                answer_floor,
+                type_floor,
+            )
+        else:
+            eligible, selection_key = _selection(
+                val_metrics,
+                precision_floor,
+                recall_floor,
+                answer_floor,
+                type_floor,
+            )
         last_eligible = eligible
         factorized_eval = ""
         if factorized_version is not None:
@@ -613,8 +919,32 @@ def main() -> None:
             f"overflow {val_metrics['proposal_overflow_rate']:.3f}, "
             f"checkpoint eligible: {'yes' if eligible else 'no'}"
         )
+        if (
+            counterbalance_train_metrics is not None
+            and counterbalance_val_metrics is not None
+        ):
+            print(
+                f"update {step}: counterbalance train loss "
+                f"{counterbalance_train_metrics['loss']:.4f}, val loss "
+                f"{counterbalance_val_metrics['loss']:.4f}, "
+                "B->I "
+                f"{counterbalance_val_metrics['gold_begin_as_inside_rate']:.3f}, "
+                "I->B "
+                f"{counterbalance_val_metrics['row_normalized_confusion_matrix']['I']['B']:.3f}, "
+                "span precision "
+                f"{counterbalance_val_metrics['exact_span_precision']:.3f}, "
+                "span recall "
+                f"{counterbalance_val_metrics['exact_span_recall']:.3f}, "
+                "answer recall "
+                f"{counterbalance_val_metrics['answer_candidate_recall']:.3f}"
+            )
         slot = None
-        if math.isfinite(val_metrics["loss"]):
+        selection_loss = val_metrics["loss"]
+        if counterbalance_val_metrics is not None:
+            selection_loss = (
+                selection_loss + counterbalance_val_metrics["loss"]
+            ) / 2.0
+        if math.isfinite(selection_loss):
             if eligible and (best_key is None or selection_key > best_key):
                 slot = "best"
             elif not eligible and (
@@ -623,7 +953,7 @@ def main() -> None:
                 slot = "diagnostic"
         if slot == "best":
             best_key = selection_key
-            best_loss = val_metrics["loss"]
+            best_loss = selection_loss
             best_step = step
             without_improvement = 0
             save_checkpoint(
@@ -634,6 +964,10 @@ def main() -> None:
                 extra={
                     **metadata,
                     "best_validation_loss": best_loss,
+                    "retained_validation_metrics": val_metrics,
+                    "counterbalance_validation_metrics": (
+                        counterbalance_val_metrics
+                    ),
                     "best_step": best_step,
                     "checkpoint_eligible": True,
                 },
@@ -649,8 +983,12 @@ def main() -> None:
                 step,
                 extra={
                     **metadata,
-                    "diagnostic_validation_loss": val_metrics["loss"],
+                    "diagnostic_validation_loss": selection_loss,
                     "diagnostic_step": step,
+                    "retained_validation_metrics": val_metrics,
+                    "counterbalance_validation_metrics": (
+                        counterbalance_val_metrics
+                    ),
                     "checkpoint_eligible": False,
                 },
             )
@@ -680,15 +1018,33 @@ def main() -> None:
         accumulated_end_loss = 0.0
         accumulated_start_positions = 0
         accumulated_end_positions = 0
-        for _ in range(accumulation):
-            batch = _balanced_batch(
-                phase31_train_examples,
-                phase32_train_examples,
-                batch_size,
-                tokenizer,
-                model.source_width,
-                device,
+        accumulated_counterbalance_rows = 0
+        counterbalance_slots = set()
+        if counterbalance_version is not None:
+            counterbalance_slots = set(
+                _counterbalance_slots(
+                    step, accumulation, counterbalance_microbatches
+                )
             )
+        for microbatch in range(accumulation):
+            if microbatch in counterbalance_slots:
+                batch = _sample_batch(
+                    counterbalance_train_examples,
+                    batch_size,
+                    tokenizer,
+                    model.source_width,
+                    device,
+                )
+                accumulated_counterbalance_rows += batch_size
+            else:
+                batch = _balanced_batch(
+                    phase31_train_examples,
+                    phase32_train_examples,
+                    batch_size,
+                    tokenizer,
+                    model.source_width,
+                    device,
+                )
             output = model(
                 *batch, boundary_loss_weight=boundary_loss_weight
             )
@@ -727,10 +1083,17 @@ def main() -> None:
                     f"type {accumulated_type_loss / accumulation:.4f}, "
                     f"type positions {accumulated_type_positions}, "
                 )
+            counterbalance_log = ""
+            if counterbalance_version is not None:
+                counterbalance_log = (
+                    f"counterbalance rows {accumulated_counterbalance_rows}/"
+                    f"{batch_size * accumulation}, "
+                )
             print(
                 f"step {step}: loss {accumulated_loss / accumulation:.4f}, "
                 f"tag {accumulated_tag_loss / accumulation:.4f}, "
                 f"{factorized_log}"
+                f"{counterbalance_log}"
                 f"start {accumulated_start_loss / accumulation:.4f}, "
                 f"end {accumulated_end_loss / accumulation:.4f}, "
                 f"boundary positions "

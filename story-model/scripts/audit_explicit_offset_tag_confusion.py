@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from collections import defaultdict
@@ -29,6 +30,7 @@ from story_model.explicit_offset_candidate_proposer import (
     proposal_record_is_eligible,
 )
 from story_model.models import build_model
+from story_model.provenance import canonical_json_sha256
 from story_model.runtime import resolve_device
 from story_model.unified_typed_span_resolver import (
     SUPPORT_MASK_VERSION,
@@ -59,6 +61,14 @@ except ModuleNotFoundError as error:
 
 
 TAG_CONFUSION_AUDIT_VERSION = 1
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _load_model(path: Path, device: torch.device):
@@ -313,6 +323,7 @@ def main() -> None:
     summary = {
         "tag_confusion_audit_version": TAG_CONFUSION_AUDIT_VERSION,
         "checkpoint": str(args.checkpoint),
+        "checkpoint_sha256": _sha256(args.checkpoint),
         "checkpoint_step": checkpoint.get("step", 0),
         "checkpoint_eligible": checkpoint.get("extra", {}).get(
             "checkpoint_eligible"
@@ -332,6 +343,15 @@ def main() -> None:
         "checkpoint_factorized_boundary_type_version": checkpoint.get(
             "extra", {}
         ).get("factorized_boundary_type_version"),
+        "checkpoint_boundary_counterbalance_version": checkpoint.get(
+            "extra", {}
+        ).get("boundary_counterbalance_version"),
+        "checkpoint_counterbalance_manifest_sha256": checkpoint.get(
+            "extra", {}
+        ).get("counterbalance_manifest_sha256"),
+        "checkpoint_tokenizer_sha256": canonical_json_sha256(
+            tokenizer.to_dict()
+        ),
         "device": str(device),
         "decoder_policy": "unchanged_permissive",
         "training_changes": "none",
