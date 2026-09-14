@@ -108,6 +108,48 @@ architecture, objective, optimizer, and 1,000-update ceiling remain fixed.
 See `docs/phase35_boundary_counterbalance.md` for the tokenizer-aware builder,
 smoke/pilot commands, frozen audits, and promotion gate.
 
+## Phase 36a crossed boundary identity-context audit
+
+Phase 35 repaired focus starts for its eight trained BPE identities but was
+rejected for incomplete transfer, poor complete-span behavior, and retained
+type regressions. Phase 36a crosses trained, held-out, and legacy identities
+through identical lexical/transfer contexts under the frozen Phase 34d and
+Phase 35 checkpoints. It changes no training or decoding. See
+`docs/phase36a_crossed_boundary_identity.md` for the registered audit and
+decision branches.
+
+## Phase 36b paired identity invariance
+
+Phase 36b keeps the Phase 34d architecture and decoder fixed while applying a
+broad same-width token swap and paired route B/I consistency loss in the
+training loop. The replacement pool excludes all 14 registered identities and
+is frozen in checkpoint provenance. See
+`docs/phase36b_paired_identity_invariance.md` for the pilot and gate.
+
+## Phase 36c begin-only identity invariance
+
+Phase 36b fixed identity transfer but broadly damaged complete-span
+precision/recall. Phase 36c changes exactly one variable: swaps are
+constructed only at gold `B:route` positions, never `I:route`. Everything
+else — loss weight, swap pool, sampler, schedule, and architecture — is
+identical to Phase 36b. A hard audit independently proves no `I:route` pair
+was generated and that pairing opportunity did not shrink under the
+restriction. See `docs/phase36c_begin_only_identity_invariance.md` for the
+pilot, hard audit, and gate.
+
+## Phase 36d clean-anchor identity invariance
+
+Phase 36c proved position was not the damaging variable: even with zero
+`I:route` pairs generated, span precision fell in all 28 identity/split
+cells and the gold-`I` margin shifted 1.33 logits toward `B`. Phase 36d
+restores begin-and-inside pairing but removes every supervised tag/type/
+boundary contribution from the swapped copy — only the original row is
+directly supervised; the swapped copy participates only through the JSD
+consistency term. A dedicated test proves that at λ=0 this reduces exactly
+to the Phase 35 base trainer's loss and gradients. See
+`docs/phase36d_clean_anchor_identity_invariance.md` for the mechanism,
+pilot, and gate.
+
 ## Phase 12 document corpus
 
 Place at least two UTF-8 `.txt` documents under `data/raw/`. The

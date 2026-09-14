@@ -349,6 +349,15 @@ def main() -> None:
         "checkpoint_counterbalance_manifest_sha256": checkpoint.get(
             "extra", {}
         ).get("counterbalance_manifest_sha256"),
+        "checkpoint_paired_identity_invariance_version": checkpoint.get(
+            "extra", {}
+        ).get("paired_identity_invariance_version"),
+        "checkpoint_identity_invariance_loss_weight": checkpoint.get(
+            "extra", {}
+        ).get("identity_invariance_loss_weight"),
+        "checkpoint_identity_invariance_swap_pool_sha256": checkpoint.get(
+            "extra", {}
+        ).get("identity_invariance_swap_pool_sha256"),
         "checkpoint_tokenizer_sha256": canonical_json_sha256(
             tokenizer.to_dict()
         ),

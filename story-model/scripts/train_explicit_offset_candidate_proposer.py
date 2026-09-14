@@ -39,6 +39,21 @@ from story_model.explicit_offset_candidate_proposer import (
     proposal_record_is_eligible,
 )
 from story_model.models import build_model
+from story_model.paired_identity_invariance import (
+    BEGIN_AND_INSIDE_POSITION_MODE,
+    BEGIN_ONLY_POSITION_MODE,
+    CLEAN_ANCHOR_SUPERVISION_MODE,
+    FULL_SUPERVISION_MODE,
+    PAIRED_IDENTITY_INVARIANCE_VERSION,
+    build_identity_swap_pool,
+    identity_swap_position_counts,
+    mask_swapped_supervision,
+    paired_identity_invariance_batch,
+    paired_identity_invariance_loss,
+    registered_identity_ids,
+    supervised_diagnostic_losses,
+    validate_identity_swap_pool,
+)
 from story_model.provenance import canonical_json_sha256, training_fingerprints
 from story_model.runtime import resolve_device, seed_everything
 from story_model.train import learning_rate_for_step, set_learning_rate
@@ -90,6 +105,12 @@ def _load_config(path: Path) -> dict:
     )
     counterbalance_version = config.get("train", {}).get(
         "boundary_counterbalance_version"
+    )
+    identity_invariance_version = config.get("train", {}).get(
+        "paired_identity_invariance_version"
+    )
+    identity_invariance_weight = float(
+        config.get("train", {}).get("identity_invariance_loss_weight", 0.0)
     )
     if sum(
         value is not None
@@ -178,6 +199,25 @@ def _load_config(path: Path) -> dict:
                 "counterbalance microbatches must be between zero and the "
                 "gradient accumulation count"
             )
+    if identity_invariance_version is not None:
+        if type(identity_invariance_version) is not int or (
+            identity_invariance_version != PAIRED_IDENTITY_INVARIANCE_VERSION
+        ):
+            raise ValueError("unsupported paired_identity_invariance_version")
+        if counterbalance_version != BOUNDARY_COUNTERBALANCE_VERSION:
+            raise ValueError("paired identity invariance requires the Phase 35 mixture")
+        if abs(boundary_loss_weight - 1.0) > 1.0e-9:
+            raise ValueError("paired identity invariance requires boundary_loss_weight=1.0")
+        if identity_invariance_weight <= 0.0 or not math.isfinite(
+            identity_invariance_weight
+        ):
+            raise ValueError(
+                "identity_invariance_loss_weight must be finite and positive"
+            )
+    elif identity_invariance_weight != 0.0:
+        raise ValueError(
+            "identity_invariance_loss_weight requires a registered version"
+        )
     return config
 
 
@@ -583,6 +623,32 @@ def main() -> None:
     counterbalance_version = train_config.get(
         "boundary_counterbalance_version"
     )
+    identity_invariance_version = train_config.get(
+        "paired_identity_invariance_version"
+    )
+    identity_invariance_loss_weight = float(
+        train_config.get("identity_invariance_loss_weight", 0.0)
+    )
+    identity_invariance_begin_only = identity_invariance_version == 2
+    identity_invariance_clean_anchor = identity_invariance_version == 3
+    identity_invariance_position_mode = (
+        None
+        if identity_invariance_version is None
+        else (
+            BEGIN_ONLY_POSITION_MODE
+            if identity_invariance_begin_only
+            else BEGIN_AND_INSIDE_POSITION_MODE
+        )
+    )
+    identity_invariance_supervision_mode = (
+        None
+        if identity_invariance_version is None
+        else (
+            CLEAN_ANCHOR_SUPERVISION_MODE
+            if identity_invariance_clean_anchor
+            else FULL_SUPERVISION_MODE
+        )
+    )
     model = ExplicitOffsetCandidateProposer(
         resolver,
         tokenizer,
@@ -618,6 +684,8 @@ def main() -> None:
     counterbalance_val = ()
     counterbalance_train_examples = ()
     counterbalance_val_examples = ()
+    identity_swap_pool = None
+    identity_swap_pool_by_width = None
     if counterbalance_version is not None:
         manifest_path = Path(data_config["counterbalance_manifest_path"])
         counterbalance_manifest = json.loads(
@@ -654,6 +722,12 @@ def main() -> None:
         counterbalance_val_examples = encode_proposal_records(
             counterbalance_val, tokenizer, block_size
         )
+        if identity_invariance_version is not None:
+            excluded_ids = registered_identity_ids(counterbalance_manifest)
+            identity_swap_pool = build_identity_swap_pool(tokenizer, excluded_ids)
+            identity_swap_pool_by_width = validate_identity_swap_pool(
+                identity_swap_pool, tokenizer, excluded_ids
+            )
 
     optimizer = torch.optim.AdamW(
         tuple(model.proposer_parameters()),
@@ -745,6 +819,20 @@ def main() -> None:
             if counterbalance_manifest is not None
             else None
         ),
+        "paired_identity_invariance_version": identity_invariance_version,
+        "identity_invariance_loss_weight": (
+            identity_invariance_loss_weight
+            if identity_invariance_version is not None
+            else None
+        ),
+        "identity_invariance_position_mode": identity_invariance_position_mode,
+        "identity_invariance_supervision_mode": identity_invariance_supervision_mode,
+        "identity_invariance_swap_pool": identity_swap_pool,
+        "identity_invariance_swap_pool_sha256": (
+            canonical_json_sha256(identity_swap_pool)
+            if identity_swap_pool is not None
+            else None
+        ),
         "token_end_premise_path": (
             str(token_end_premise_path) if token_end_premise_path else None
         ),
@@ -806,6 +894,24 @@ def main() -> None:
             f"{len(counterbalance_pools['train'])}, heldout "
             f"{len(counterbalance_pools['heldout'])}, overlap 0"
         )
+    if identity_invariance_version is not None:
+        assert identity_swap_pool is not None
+        print(
+            "paired identity invariance: version "
+            f"{identity_invariance_version}, Jensen-Shannon B/I consistency"
+        )
+        print(f"identity-invariance loss weight: {identity_invariance_loss_weight:g}")
+        print(f"identity-invariance position mode: {identity_invariance_position_mode}")
+        print(
+            "identity-invariance supervision mode: "
+            f"{identity_invariance_supervision_mode}"
+        )
+        print(
+            "identity swap pool: "
+            f"{identity_swap_pool['eligible_token_count']} tokens across "
+            f"{len(identity_swap_pool['eligible_token_ids_by_width'])} widths, "
+            "14 registered identities excluded"
+        )
     print("excluded proposer cases: wrong_type (retained in oracle gate)")
     print(
         f"training examples: {len(train_examples):,} "
@@ -832,6 +938,7 @@ def main() -> None:
     diagnostic_key = None
     without_improvement = 0
     last_eligible = False
+    total_identity_position_counts = {"B": 0, "I": 0}
 
     def evaluate_and_save(step: int) -> bool:
         nonlocal best_key, best_loss, best_step, diagnostic_key
@@ -970,6 +1077,11 @@ def main() -> None:
                     ),
                     "best_step": best_step,
                     "checkpoint_eligible": True,
+                    "identity_invariance_total_swap_position_counts": (
+                        dict(total_identity_position_counts)
+                        if identity_invariance_version is not None
+                        else None
+                    ),
                 },
             )
             print(f"new best: val loss {best_loss:.4f} at update {step}")
@@ -990,6 +1102,11 @@ def main() -> None:
                         counterbalance_val_metrics
                     ),
                     "checkpoint_eligible": False,
+                    "identity_invariance_total_swap_position_counts": (
+                        dict(total_identity_position_counts)
+                        if identity_invariance_version is not None
+                        else None
+                    ),
                 },
             )
             print(f"new diagnostic-ineligible at update {step}")
@@ -1019,6 +1136,11 @@ def main() -> None:
         accumulated_start_positions = 0
         accumulated_end_positions = 0
         accumulated_counterbalance_rows = 0
+        accumulated_identity_swaps = 0
+        accumulated_identity_invariance_loss = 0.0
+        accumulated_base_supervised_loss = 0.0
+        accumulated_swapped_supervised_loss = 0.0
+        step_identity_position_counts = {"B": 0, "I": 0}
         counterbalance_slots = set()
         if counterbalance_version is not None:
             counterbalance_slots = set(
@@ -1045,6 +1167,18 @@ def main() -> None:
                     model.source_width,
                     device,
                 )
+            identity_swaps = ()
+            pre_swap_batch_size = batch[0].shape[0]
+            if identity_invariance_version is not None:
+                assert identity_swap_pool_by_width is not None
+                batch, identity_swaps = paired_identity_invariance_batch(
+                    batch,
+                    tokenizer,
+                    identity_swap_pool_by_width,
+                    begin_only=identity_invariance_begin_only,
+                )
+                if identity_invariance_clean_anchor:
+                    batch = mask_swapped_supervision(batch, pre_swap_batch_size)
             output = model(
                 *batch, boundary_loss_weight=boundary_loss_weight
             )
@@ -1052,8 +1186,27 @@ def main() -> None:
             assert output.tag_loss is not None
             assert output.boundary_start_loss is not None
             assert output.boundary_end_loss is not None
-            accumulated_loss += float(output.loss.detach())
+            identity_invariance_loss = paired_identity_invariance_loss(
+                output.tag_logits, identity_swaps
+            )
+            total_loss = output.loss + (
+                identity_invariance_loss_weight * identity_invariance_loss
+            )
+            accumulated_loss += float(total_loss.detach())
             accumulated_tag_loss += float(output.tag_loss.detach())
+            if identity_invariance_version is not None:
+                base_loss_value, swapped_loss_value = supervised_diagnostic_losses(
+                    output.tag_logits, batch[3], pre_swap_batch_size
+                )
+                accumulated_base_supervised_loss += base_loss_value
+                accumulated_swapped_supervised_loss += swapped_loss_value
+                position_counts = identity_swap_position_counts(identity_swaps)
+                step_identity_position_counts["B"] += position_counts["B"]
+                step_identity_position_counts["I"] += position_counts["I"]
+            accumulated_identity_invariance_loss += float(
+                identity_invariance_loss.detach()
+            )
+            accumulated_identity_swaps += len(identity_swaps)
             if factorized_version is not None:
                 assert output.boundary_class_loss is not None
                 assert output.type_loss is not None
@@ -1068,12 +1221,15 @@ def main() -> None:
             accumulated_end_loss += float(output.boundary_end_loss.detach())
             accumulated_start_positions += output.boundary_start_positions
             accumulated_end_positions += output.boundary_end_positions
-            (output.loss / accumulation).backward()
+            (total_loss / accumulation).backward()
         gradient_norm = torch.nn.utils.clip_grad_norm_(
             tuple(model.proposer_parameters()), clip
         )
         optimizer.step()
         completed_steps = step
+        if identity_invariance_version is not None:
+            total_identity_position_counts["B"] += step_identity_position_counts["B"]
+            total_identity_position_counts["I"] += step_identity_position_counts["I"]
         if step % log_interval == 0:
             factorized_log = ""
             if factorized_version is not None:
@@ -1089,11 +1245,22 @@ def main() -> None:
                     f"counterbalance rows {accumulated_counterbalance_rows}/"
                     f"{batch_size * accumulation}, "
                 )
+            invariance_log = ""
+            if identity_invariance_version is not None:
+                invariance_log = (
+                    f"identity swaps {accumulated_identity_swaps} "
+                    f"(B={step_identity_position_counts['B']},"
+                    f"I={step_identity_position_counts['I']}), consistency "
+                    f"{accumulated_identity_invariance_loss / accumulation:.4f}, "
+                    f"base {accumulated_base_supervised_loss / accumulation:.4f}, "
+                    f"swapped {accumulated_swapped_supervised_loss / accumulation:.4f}, "
+                )
             print(
                 f"step {step}: loss {accumulated_loss / accumulation:.4f}, "
                 f"tag {accumulated_tag_loss / accumulation:.4f}, "
                 f"{factorized_log}"
                 f"{counterbalance_log}"
+                f"{invariance_log}"
                 f"start {accumulated_start_loss / accumulation:.4f}, "
                 f"end {accumulated_end_loss / accumulation:.4f}, "
                 f"boundary positions "
@@ -1116,6 +1283,11 @@ def main() -> None:
             "best_step": best_step,
             "best_checkpoint_eligible": best_step is not None,
             "checkpoint_eligible": last_eligible,
+            "identity_invariance_total_swap_position_counts": (
+                dict(total_identity_position_counts)
+                if identity_invariance_version is not None
+                else None
+            ),
         },
     )
     if best_step is None:
