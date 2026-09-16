@@ -1,3 +1,12 @@
+"""Tests for the Phase 36d gate logic.
+
+Documented in docs/phase36d_clean_anchor_identity_invariance.md under
+"Decision branches". Covers all five branches (pass, transfer-failed,
+span-still-damaged, regressed-retained, invalid) plus the non-mutation
+guarantee shared by every decision script in this chain: the function must
+never mutate its inputs, even when it returns the invalid branch.
+"""
+
 from copy import deepcopy
 
 from scripts.phase36d_clean_anchor_identity_invariance_decision import (

@@ -123,3 +123,61 @@ If no eligible `best.pt` exists, the frozen diagnostics may substitute
 
 Every branch keeps `checkpoint_promotion_authorized: false`; only the
 explicit pass branch sets `full_phase34_evaluation_authorized: true`.
+
+## Investigation record
+
+Phase 36d's checkpoint is rejected — `checkpoint_promotion_authorized:
+false` under every branch, and it landed on
+`clean_anchor_identity_invariance_regressed_retained` (no eligible
+`best.pt`). That gate outcome stands unchanged. But the follow-on frozen
+diagnostics (Phase 36e's row-level/error-taxonomy audit and Phase 36f's
+background-error attribution audit, both no-training comparisons against
+Phase 35 and Phase 36b on the identical crossed-identity panel) established
+a real, separable experimental contribution inside that rejected
+checkpoint, worth recording on its own terms.
+
+**Defensible finding.** At the matched 800-step checkpoints, clean-anchor
+training preserved the 14-identity B→I pass, roughly halved fragmentation,
+and reduced background false spans by 20.8% relative to Phase 36b.
+Background errors remained near the Phase 35 baseline, and complete-span
+quality remained insufficient for promotion.
+
+**Three qualifications:**
+
+1. **A pre-existing error does not imply an architecture defect.** Phase
+   36f established that background false positives were already present in
+   Phase 35 — it did not establish their origin in Phase 34d, and it does
+   not show that fixing them requires architectural changes. Training
+   composition, supervision, and loss weighting can change this behavior
+   with the architecture and decoder held fixed. Addressing it would
+   require a separately registered experiment; the frozen architecture does
+   not prohibit that work.
+2. **"Returns approximately to baseline" is supported; "matches or beats
+   every section" is not.** Two exceptions: Phase 36d `conversation` errors
+   exceed Phase 35 (1.39% vs. 1.21% lexical, 2.80% vs. 2.71% transfer), and
+   Phase 36b `scene` errors are slightly *lower* than Phase 35 on lexical
+   (0.56% vs. 0.58%). The overall −2.1% span-count difference should not be
+   treated as an established improvement, given the checkpoint-step
+   mismatch (Phase 35 is step 1000; Phase 36b/36d are both step 800) and
+   the lack of replication.
+3. **The fragmentation improvement is established against Phase 36b, not
+   Phase 35.** That makes it a meaningful ablation result — removing
+   swapped-copy supervision improved this outcome relative to full
+   supervision. It does not demonstrate that clean-anchor training improves
+   fragmentation over the original (pre-Phase-36b) counterbalance baseline.
+   The lexical-split precision/recall regression documented in Phase 36e
+   still matters independently and is unresolved.
+
+| Question | Supported conclusion |
+|---|---|
+| Can identity invariance repair the tested B/I generalization gap? | Yes, on the registered panel. |
+| Does clean-anchor supervision improve on fully supervised swaps? | Yes, in these matched-checkpoint results. |
+| Did identity invariance originate the background-error problem? | No; it was already present in Phase 35. |
+| Have the underlying causes of background errors and fragmentation been fully identified? | No; their behavior is better separated, but their mechanisms remain partly unresolved. |
+| Is Phase 36d eligible for promotion? | No. |
+
+**Disposition:** documenting a successful component inside a rejected
+experiment is appropriate here. Clean-anchor is the better-supported
+pairing design for any future paired-identity-invariance experiment in this
+chain. The original gate decision is preserved unchanged — no promotion.
+Complete-span extraction remains the unresolved project blocker.

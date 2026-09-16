@@ -1,3 +1,19 @@
+"""Phase 36d's non-negotiable correctness guard.
+
+Documented in docs/phase36d_clean_anchor_identity_invariance.md under
+"Correctness test (non-negotiable)". The load-bearing test is
+``test_masking_zero_lambda_matches_the_base_trainer_exactly``: on a real
+(tiny) model, it proves that with ``identity_invariance_loss_weight=0`` the
+clean-anchor path's loss and every parameter's gradient are numerically
+identical (atol=1e-6) to the unmodified Phase 35 base trainer run on the
+same original batch. This guards against a masking or doubled-batch-
+averaging bug silently rescaling the supervised objective -- do not train
+Phase 36d if this test fails. The remaining tests check the masking
+primitive (``mask_swapped_supervision``) in isolation: it masks every
+position of a swapped row, not just the swap position, and is a no-op when
+no swap occurred.
+"""
+
 from __future__ import annotations
 
 import torch
