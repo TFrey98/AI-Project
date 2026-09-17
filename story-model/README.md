@@ -150,6 +150,35 @@ to the Phase 35 base trainer's loss and gradients. See
 `docs/phase36d_clean_anchor_identity_invariance.md` for the mechanism,
 pilot, and gate.
 
+## Phase 36e frozen span-failure audit
+
+Phase 36e changes no training, weights, decoder, or thresholds. It compares
+Phase 35, 36b, and 36d on the identical crossed-identity panel and explains
+*what* deteriorated: row-level transitions, a per-gold-span error taxonomy
+(early ending, fragmentation, late ending, misplaced start, missing), and a
+non-cherry-picked census of spurious spans by byte length and prompt
+section. See `docs/phase36e_frozen_span_failure.md`.
+
+## Phase 36f background-error attribution
+
+Phase 36f attributes the background false positives Phase 36e found: it runs
+the same census against Phase 35, records the actual emitting token for each
+false span, and reports positive-vs-O confusion normalized by gold-O bytes.
+Headline result — the problem predates identity-invariance training
+entirely. Closes with a documented partial success for clean-anchor
+supervision while preserving Phase 36d's rejected checkpoint status. See
+`docs/phase36f_background_error_attribution.md`.
+
+## Phase 36g consistency-weight ablation
+
+Phase 36g varies exactly one thing against the Phase 36d clean-anchor
+design: the consistency weight (λ=1.0 reference vs. λ=0.1 candidate), both
+arms compared at a predeclared step 800 via the new `train.comparison_step`
+config key. Result — rejected: the tenfold reduction undid the identity
+repair on the three hardest identities while producing no span-quality
+recovery, establishing that consistency strength is not the lever for
+complete spans. See `docs/phase36g_consistency_weight_ablation.md`.
+
 ## Phase 12 document corpus
 
 Place at least two UTF-8 `.txt` documents under `data/raw/`. The

@@ -1,3 +1,16 @@
+"""Tests for the Phase 36e span-failure taxonomy.
+
+Documented in docs/phase36e_frozen_span_failure.md. These cover the pure
+classification functions in `story_model.span_failure_analysis` — every
+branch of `classify_gold_span_prediction` (correct, missing_entirely,
+misplaced_start, early_ending, fragmentation, late_ending), the
+zero-byte-overlap definition of a spurious span, and the collapsed
+positive-vs-outside confusion that is deliberately independent of B/I
+identity. No model is involved: these are hand-built tag sequences, so a
+taxonomy regression fails here rather than silently changing an audit's
+reported numbers.
+"""
+
 import pytest
 
 from story_model.explicit_offset_candidate_proposer import (

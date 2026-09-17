@@ -218,6 +218,18 @@ def _load_config(path: Path) -> dict:
         raise ValueError(
             "identity_invariance_loss_weight requires a registered version"
         )
+    comparison_step = config.get("train", {}).get("comparison_step")
+    if comparison_step is not None:
+        if type(comparison_step) is not int or comparison_step < 1:
+            raise ValueError("comparison_step must be a positive integer")
+        if comparison_step > int(config.get("train", {}).get("max_steps", 0)):
+            raise ValueError("comparison_step cannot exceed max_steps")
+        eval_interval = int(config.get("train", {}).get("eval_interval", 50))
+        if comparison_step % eval_interval:
+            raise ValueError(
+                "comparison_step must land on an evaluation step so the saved "
+                "state is the one that was evaluated"
+            )
     return config
 
 
@@ -630,6 +642,7 @@ def main() -> None:
         train_config.get("identity_invariance_loss_weight", 0.0)
     )
     identity_invariance_begin_only = identity_invariance_version == 2
+    comparison_step = train_config.get("comparison_step")
     identity_invariance_clean_anchor = identity_invariance_version == 3
     identity_invariance_position_mode = (
         None
@@ -827,6 +840,7 @@ def main() -> None:
         ),
         "identity_invariance_position_mode": identity_invariance_position_mode,
         "identity_invariance_supervision_mode": identity_invariance_supervision_mode,
+        "comparison_step": comparison_step,
         "identity_invariance_swap_pool": identity_swap_pool,
         "identity_invariance_swap_pool_sha256": (
             canonical_json_sha256(identity_swap_pool)
@@ -1045,6 +1059,32 @@ def main() -> None:
                 "answer recall "
                 f"{counterbalance_val_metrics['answer_candidate_recall']:.3f}"
             )
+        if comparison_step is not None and step == comparison_step:
+            # A predeclared snapshot for cross-arm comparison. Saved from the
+            # state that was just evaluated, independent of whether selection
+            # would have kept it, so two arms can be compared at one fixed
+            # step rather than at whatever step each happened to select.
+            save_checkpoint(
+                checkpoint_dir / f"step-{comparison_step}.pt",
+                model,
+                optimizer,
+                step,
+                extra={
+                    **metadata,
+                    "comparison_step_checkpoint": True,
+                    "retained_validation_metrics": val_metrics,
+                    "counterbalance_validation_metrics": (
+                        counterbalance_val_metrics
+                    ),
+                    "checkpoint_eligible": eligible,
+                    "identity_invariance_total_swap_position_counts": (
+                        dict(total_identity_position_counts)
+                        if identity_invariance_version is not None
+                        else None
+                    ),
+                },
+            )
+            print(f"predeclared comparison checkpoint saved at update {step}")
         slot = None
         selection_loss = val_metrics["loss"]
         if counterbalance_val_metrics is not None:
